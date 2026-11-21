@@ -1,0 +1,22 @@
+{
+  "name": "ponitero",
+  "private": true,
+  "workspaces": [
+    "api",
+    "web"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "concurrently -k 'npm run dev -w api' 'npm run dev -w web'",
+    "build": "npm run build -w api && npm run build -w web",
+    "db:start": "supabase start",
+    "db:configure": "node scripts/configure.mjs",
+    "demo": "node --env-file=api/.env scripts/demo.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.0",
+    "supabase": "2.110.0"
+  }
+}

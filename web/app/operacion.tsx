@@ -117,7 +117,8 @@ export function Operacion({ cargar, registrar, administra }: {
         {!!datos.planes?.length && <details><summary>Historial de estimaciones</summary><ul>
           {datos.planes.map(escenario => <li key={escenario.id}>
             {escenario.kg} kg · {escenario.merma} % de merma · Tope comercial {pesos.format(Number(escenario.tope_comercial))}
-            {' · '}Reserva {pesos.format(Number(escenario.reserva))} · Tope conservador {pesos.format(Number(escenario.tope_conservador))}
+            {' · '}Reserva {pesos.format(Number(escenario.reserva))} · Tope conservador total {pesos.format(Number(escenario.tope_conservador))}
+            {' · '}<strong>Tope conservador por tonelada {pesos.format(Number(escenario.tope_por_tonelada))}/t</strong>
             {escenario.oferta != null && <> · Oferta {pesos.format(Number(escenario.oferta))}/t · Resultado simulado{' '}
               {pesos.format(Number(escenario.resultado_simulado))}{escenario.margen_simulado != null && ' (' + escenario.margen_simulado + ' %)'}</>}
           </li>)}

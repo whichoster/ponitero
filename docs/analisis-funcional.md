@@ -27,11 +27,33 @@ El **viaje** concentra los ingresos, costos, documentos y pagos de una entrega. 
 
 ### Negocios y permisos
 
-Cada negocio se registra de forma independiente y queda pendiente de aprobación del superadministrador, incluido el negocio inicial. El superadministrador tiene control total para aprobar, suspender o reactivar negocios, gestionar usuarios y consultar o corregir operaciones para soporte. El administrador del negocio gestiona sus usuarios y viajes. El encargado captura gastos en los viajes asignados. Los datos se aíslan por negocio y los cambios privilegiados dejan historial de actor, fecha, acción y motivo.
+Cada negocio se registra de forma independiente y queda pendiente de aprobación del superadministrador, incluido el negocio inicial. El superadministrador puede aprobar, suspender o reactivar negocios y consultar o corregir operaciones para soporte.
+
+- **Superadministrador.** Puede agregar y dar de baja a los administradores de cada negocio y asignarles o revocarles los permisos correspondientes, incluido el permiso para gestionar encargados.
+- **Administrador del negocio.** Gestiona los viajes de su negocio. Con el permiso asignado por el superadministrador, puede dar de alta y de baja a los encargados de ese negocio. La baja revoca el acceso al negocio y a sus viajes asignados, y conserva el historial de las operaciones que realizó la persona.
+- **Encargado.** Captura gastos en los viajes asignados. También puede iniciar sesión, seleccionar un negocio al que pertenece y usar **Solicitar viaje** desde su panel, incluso cuando todavía no tiene viajes asignados.
+- **Eliminación del negocio.** El superadministrador puede eliminar cualquier negocio y el administrador puede eliminar el negocio que administra. Antes de proceder, la aplicación muestra una advertencia que identifica el negocio, explica las consecuencias y solicita una confirmación explícita.
+
+Los datos se aíslan por negocio. Las altas, bajas y cambios de permisos, así como la eliminación de negocios, dejan historial de actor, fecha, acción y motivo.
+
+### Registro de negocio con nombre existente
+
+Antes de registrar un negocio, el sistema verifica si el nombre ya existe. La comparación ignora mayúsculas, minúsculas y espacios sobrantes. Si hay coincidencia, la aplicación avisa y pregunta cómo desea continuar. La persona puede **Cambiar el nombre** o **Volver**. Si ya tiene acceso al negocio existente, también puede elegir **Ir al negocio existente**. La coincidencia conserva lo capturado y no crea un segundo negocio ni concede acceso por sí sola. La API aplica esta regla también cuando dos personas intentan registrar el mismo nombre al mismo tiempo.
+
+### Regreso al apartado o paso anterior
+
+Cada apartado y cada paso de captura permite **Volver** a la pantalla o al paso del que se llegó. En un formulario de varios pasos, regresar conserva lo capturado. Si volver implica salir de un formulario y perder datos sin guardar, la aplicación pide confirmación y permite permanecer en la pantalla para continuar. Volver no deshace operaciones ya guardadas.
+
+### Solicitud de viaje por un encargado
+
+1. El encargado selecciona **Solicitar viaje**, captura los datos de apertura del siguiente apartado y envía la solicitud. Puede consultar sus propias solicitudes y su estado dentro del negocio.
+2. La solicitud queda **pendiente de aprobación**. El administrador del mismo negocio puede revisarla, aprobarla o devolverla con un motivo para que el encargado corrija los datos y la vuelva a enviar.
+3. Al aprobar, el sistema crea el viaje con los datos capturados y lo asigna al encargado solicitante en la misma transacción. Desde ese momento el viaje aparece entre sus asignaciones y puede registrar gastos. La solicitud pendiente conserva los datos capturados para revisión.
+4. La solicitud conserva su vínculo con el viaje aprobado y el historial de envío, devolución y aprobación con actor, fecha y motivo de devolución cuando corresponda. Una solicitud genera como máximo un viaje.
 
 ## 3. Flujo operativo completo
 
-1. **Abrir el viaje.** Identificar cliente, producto y variedad, fecha, kilos previstos, precio de venta pactado, chofer, vehículo y placas. Registrar la tarifa del chofer y, cuando aplique, la tarifa de flete que pagará el cliente. Guardar las tarifas de este viaje aunque después cambien las del catálogo. El viaje puede llevar varias variedades y Sabormex pacta un solo precio de venta por tonelada para todo el viaje.
+1. **Abrir el viaje.** El administrador puede abrirlo directamente o aprobar una solicitud de un encargado. Antes de abrir el expediente o capturar movimientos, el administrador registra los datos de apertura. Si el encargado solicita el viaje, captura estos mismos datos en la solicitud para que el administrador los revise antes de abrir el expediente. Identificar cliente, producto y variedad, fecha, kilos previstos y precio de venta pactado. Registrar como datos obligatorios el chofer, las placas, el tipo de vehículo y la cantidad de canastos. El campo **Tipo de vehículo** muestra una lista de selección única con las opciones **Torton**, **Rabón**, **Camioneta** y **Jaula**. La tara del vehículo se puede capturar en kg y puede quedar vacía. Registrar la tarifa del chofer y, cuando aplique, la tarifa de flete que pagará el cliente. Guardar las tarifas de este viaje aunque después cambien las del catálogo. El viaje puede llevar varias variedades y Sabormex pacta un solo precio de venta por tonelada para todo el viaje.
 
 2. **Planear la compra.** Capturar merma estimada, gastos previstos y meta mínima del 30% sobre ingresos. Para una carga de referencia de 20 t, diciembre tiene una merma observada de 100–300 kg (0.5%–1.5%) y mayo de 700–800 kg (3.5%–4%). Los rangos orientan la estimación por viaje. Conservar la estimación inicial y permitir simular precios alternativos de compra. Mostrar primero el precio máximo conservador por viaje, con una reserva de ISR estimada sobre la venta de piña.
 
@@ -83,7 +105,7 @@ Al cancelar, el usuario decide por cada gasto o adelanto si queda como pérdida 
 
 El comercializador es **persona física en RESICO**. Las facturas revisadas de venta de piña a Sabormex muestran **ISR retenido del 1.25% sobre la venta de piña** e IVA a tasa 0%. Guardar la base, la tasa y el importe real del comprobante. El flete pactado con Sabormex entra en la base del margen comercial del 30% y queda fuera del cálculo de esta reserva y de la factura de piña.
 
-El **tope conservador** se muestra por defecto. Es el tope comercial menos el 1.25% de la venta estimada de piña. Distribuir la reserva en proporción al peso comprado a cada productor, con o sin CFDI. La reserva es un ajuste comercial a la oferta y el ISR real de Sabormex se registra por separado. El CFDI de compra documenta la operación.
+El **tope conservador por tonelada** se muestra por defecto para la última estimación. El historial muestra el tope conservador total y por tonelada de cada escenario. Es el tope comercial menos el 1.25% de la venta estimada de piña. Distribuir la reserva en proporción al peso comprado a cada productor, con o sin CFDI. La reserva es un ajuste comercial a la oferta y el ISR real de Sabormex se registra por separado. El CFDI de compra documenta la operación.
 
 Ejemplo. Con $100,000 de venta estimada de piña, $17,000 de flete por cobrar, $20,000 de costos distintos de la compra y 20 t compradas, la meta del 30% es $35,100. El tope comercial es $61,900. La reserva es $1,250 y el tope conservador es $60,650 ($3,032.50/t). A un productor de 12 t le corresponden $750 de reserva y a uno de 8 t, $500.
 
@@ -123,7 +145,7 @@ Una base relacional permite conservar los vínculos entre viajes, documentos y m
 | Entidades propuestas | Relaciones y campos principales |
 |---|---|
 | `terceros`, `fincas`, `productos`, `vehiculos` | Roles de productor, cliente, transportista o prestador. Catálogos operativos y fiscales con acceso por rol. |
-| `viajes`, `estimaciones_viaje` | Cliente, producto, fechas, tarifas pactadas, chofer y vehículo. Historial de escenarios de peso, merma, gastos y margen. |
+| `viajes`, `estimaciones_viaje` | Cliente, producto, fechas, tarifas pactadas, chofer, placas, tipo de vehículo, cantidad de canastos y tara opcional en kg. Historial de escenarios de peso, merma, gastos y margen. |
 | `compras`, `remisiones_compra`, `remisiones_entrega` | Varias compras por viaje. Una remisión por proveedor y viaje, con renglones por ticket y una remisión de entrega por viaje en el flujo definido. |
 | `recepciones`, `comprobantes_recepcion` | Recepción vigente por viaje con peso confirmado. Evidencias de ticket y correo, fecha, SAP, orden de compra y monto. Conservar correcciones y una referencia al renglón de origen. |
 | `gastos`, `fletes_chofer` | Costos individuales por viaje, beneficiario y evidencias. El flete conserva su tarifa, peso base e importe. |
@@ -133,6 +155,7 @@ Una base relacional permite conservar los vínculos entre viajes, documentos y m
 | `adjuntos`, `eventos_auditoria` | Archivos originales, responsable, fechas, historial de cambios y motivo de ajustes. |
 | `adelantos_cliente`, `aplicaciones_adelanto`, `devoluciones_adelanto`, `traslados_gasto` | Crédito por cliente y temporada de origen. Aplicaciones a facturas de piña o al encabezado de una remisión de flete. Devoluciones, saldo y trazabilidad por gasto trasladado entre viajes. |
 | `negocios`, `usuarios`, `membresias`, `asignaciones_viaje` | Registro independiente por negocio, estado de aprobación, roles y asignaciones. |
+| `solicitudes_viaje` | Negocio, encargado solicitante, datos de apertura, estado, fechas, administrador revisor, motivo de devolución y vínculo único con el viaje aprobado. |
 | `tickets_finca`, `tarifas_gasto`, `revisiones_gasto` | Evidencia de pesaje en finca, tarifas por concepto y ámbito, aprobación y cambios auditados. Una combinación de ticket y concepto admite un gasto. |
 
 **Integridad.** Usar decimales de precisión fija para pesos, tarifas e importes. Definir políticas de redondeo y almacenar moneda. Validar folios dentro de su ámbito y evitar duplicados de recepciones por referencias de origen. Guardar la asignación y actualizar el saldo en una misma transacción. Limitar los importes aplicados al monto disponible y registrar excedentes aparte. Conservar el historial al corregir pesos, tarifas, documentos y pagos.
@@ -162,7 +185,7 @@ Referencias oficiales para esa etapa: [SAT](https://www.sat.gob.mx/), [Código F
 
 | Módulo | Prueba de aceptación |
 |---|---|
-| Negocios, roles y viajes asignados (primer bloque local) | Un negocio pendiente requiere aprobación. Dos negocios conservan sus datos separados y los encargados consultan únicamente los viajes asignados. |
+| Negocios, roles y viajes asignados | Un negocio pendiente requiere aprobación. El superadministrador puede agregar o dar de baja administradores y gestionar sus permisos por negocio. Un administrador con el permiso correspondiente puede agregar o dar de baja encargados de su negocio. La baja revoca el acceso y conserva el historial. Los encargados consultan sus propias solicitudes y los viajes asignados. Un encargado sin viajes asignados puede enviar una solicitud. El administrador del mismo negocio la aprueba y el viaje resultante se asigna al solicitante. Tanto el superadministrador como el administrador del negocio pueden eliminarlo después de ver una advertencia y confirmar la acción. Dos negocios conservan sus datos separados. |
 | Catálogos, viajes y estimación | Dos viajes con el mismo cliente conservan tarifas propias. Al variar la merma prevista se recalcula el precio máximo de compra. |
 | Compras y remisiones | Dos tickets del mismo proveedor generan una remisión con dos renglones en el viaje. La remisión de entrega lleva el precio del cliente. |
 | Gastos y flete del chofer | Un flete de $20,000 con $8,000 adelantados muestra $12,000 por pagar y aporta $20,000 al costo. El combustible de un mandado queda como gasto adicional. |
@@ -173,6 +196,9 @@ Referencias oficiales para esa etapa: [SAT](https://www.sat.gob.mx/), [Código F
 
 ### Pruebas de las reglas validadas
 
+- Al registrar un nombre que ya existe con distintas mayúsculas o espacios sobrantes, la aplicación muestra las opciones para continuar sin duplicar el negocio. Solo una persona con acceso puede abrir el negocio existente desde ese aviso.
+- En un flujo de varios pasos, **Volver** recupera la pantalla previa y conserva la captura. Si salir descarta datos sin guardar, la persona puede cancelar la salida y seguir editando.
+
 - Un viaje con dos productores reparte $1,250 de reserva en $750 y $500 para compras de 12 t y 8 t, con independencia del CFDI. Una merma de 500 kg reduce la venta y conserva el peso comprado.
 
 - Un viaje cancelado registra el corte como pérdida y traslada el adelanto al nuevo viaje. Cada importe cuenta una vez.
@@ -182,6 +208,10 @@ Referencias oficiales para esa etapa: [SAT](https://www.sat.gob.mx/), [Código F
 - Dos negocios aprobados conservan datos separados. El superadministrador puede intervenir para dar soporte y su acción queda auditada.
 
 - Dos tickets de un proveedor registran variedades y precios distintos dentro de una remisión. El mismo ticket admite una estiba y un corte. Una segunda estiba para ese ticket se rechaza.
+
+- Tanto en el alta directa por administración como en la solicitud de un encargado se requieren chofer, placas, tipo de vehículo y cantidad de canastos antes de abrir el expediente o capturar movimientos. Se debe elegir un tipo de vehículo de la lista: Torton, Rabón, Camioneta o Jaula. La tara puede quedar vacía y, si se captura, se conserva en kg.
+
+- Un encargado sin viajes asignados captura y envía una solicitud. El administrador de otro negocio queda excluido de la revisión. El administrador del mismo negocio devuelve la solicitud con motivo, el encargado la corrige y, al aprobarla, se crea un solo viaje asignado al solicitante.
 
 - El gasto pendiente se excluye del margen y bloquea el cierre operativo. Tras cerrar con cobros pendientes, un administrador puede agregar un gasto motivado y registrar cobros sin reabrir la operación.
 
@@ -196,6 +226,10 @@ Referencias oficiales para esa etapa: [SAT](https://www.sat.gob.mx/), [Código F
 4. Definir el alcance operativo y las pantallas de la primera versión.
 
 5. Validar en el Mac el primer bloque local antes de ampliar la aplicación o publicar.
+
+### Mejora futura
+
+Incorporar la exportación de datos o reportes por negocio, incluida la posibilidad de exportar antes de confirmar su eliminación.
 
 ## 9. Arquitectura aprobada y ejecución local
 

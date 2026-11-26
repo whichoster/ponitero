@@ -36,32 +36,51 @@ Cada negocio se registra de forma independiente y queda pendiente de aprobación
 
 Los datos se aíslan por negocio. Las altas, bajas y cambios de permisos, así como la eliminación de negocios, dejan historial de actor, fecha, acción y motivo.
 
+### Panel del administrador y página de empleados
+
+Al abrir un negocio, el administrador ve las opciones **Viajes**, **Solicitudes de viaje** y **Empleados**. La pantalla abre sin un apartado seleccionado y muestra un apartado a la vez. En **Viajes**, el selector identifica cada viaje por folio y cliente y solo muestra el viaje elegido. **Registrar viaje** está en ese apartado. Desde una solicitud aprobada, **Ir al viaje aprobado** abre directamente el viaje correspondiente. El historial de actividad sigue disponible en el panel del negocio.
+
+**Empleados** abre una página independiente. La tabla consulta las membresías activas del negocio en PostgreSQL y presenta 20 registros por página, ordenados por correo. Muestra el correo, el rol y, para los administradores, el permiso para gestionar encargados. Solo ofrece acciones autorizadas para cada fila.
+
+- **Agregar empleado** abre un modal para vincular una cuenta registrada y confirmada. El superadministrador puede agregar administradores y encargados. El administrador del negocio con permiso de gestión puede agregar encargados.
+- El icono de **Editar** abre un modal donde el superadministrador puede activar o revocar el permiso para gestionar encargados de un administrador. El correo y el rol se muestran como datos de referencia.
+- El icono de **Eliminar** confirma la baja individual. **Eliminar seleccionados** permite dar de baja a varios empleados. La casilla de encabezado selecciona las filas elegibles de la página actual. La selección y su contador se conservan al pasar de página.
+- El modal de baja identifica a las personas afectadas, pide un motivo y requiere confirmación. El superadministrador puede dar de baja a administradores y encargados. El administrador con permiso de gestión solo puede dar de baja a encargados del mismo negocio. La API valida todo el lote y aplica las bajas en una sola transacción. Si alguna baja no procede, el lote queda intacto. Cada baja revoca la membresía y las asignaciones de ese negocio y conserva la cuenta y el historial de operaciones.
+
 ### Registro de negocio con nombre existente
 
 Antes de registrar un negocio, el sistema verifica si el nombre ya existe. La comparación ignora mayúsculas, minúsculas y espacios sobrantes. Si hay coincidencia, la aplicación avisa y pregunta cómo desea continuar. La persona puede **Cambiar el nombre** o **Volver**. Si ya tiene acceso al negocio existente, también puede elegir **Ir al negocio existente**. La coincidencia conserva lo capturado y no crea un segundo negocio ni concede acceso por sí sola. La API aplica esta regla también cuando dos personas intentan registrar el mismo nombre al mismo tiempo.
 
 ### Regreso al apartado o paso anterior
 
-Cada apartado y cada paso de captura permite **Volver** a la pantalla o al paso del que se llegó. En un formulario de varios pasos, regresar conserva lo capturado. Si volver implica salir de un formulario y perder datos sin guardar, la aplicación pide confirmación y permite permanecer en la pantalla para continuar. Volver no deshace operaciones ya guardadas.
+Cada apartado y cada paso de captura permite **Volver** con una flecha de retorno a la pantalla o al paso del que se llegó. En un formulario de varios pasos, regresar conserva lo capturado. Si volver implica salir de un formulario y perder datos sin guardar, la aplicación pide confirmación y permite permanecer en la pantalla para continuar. Volver no deshace operaciones ya guardadas.
 
 ### Solicitud de viaje por un encargado
 
-1. El encargado selecciona **Solicitar viaje**, captura los datos de apertura del siguiente apartado y envía la solicitud. Puede consultar sus propias solicitudes y su estado dentro del negocio.
-2. La solicitud queda **pendiente de aprobación**. El administrador del mismo negocio puede revisarla, aprobarla o devolverla con un motivo para que el encargado corrija los datos y la vuelva a enviar.
-3. Al aprobar, el sistema crea el viaje con los datos capturados y lo asigna al encargado solicitante en la misma transacción. Desde ese momento el viaje aparece entre sus asignaciones y puede registrar gastos. La solicitud pendiente conserva los datos capturados para revisión.
-4. La solicitud conserva su vínculo con el viaje aprobado y el historial de envío, devolución y aprobación con actor, fecha y motivo de devolución cuando corresponda. Una solicitud genera como máximo un viaje.
+1. El encargado selecciona **Solicitar viaje** en el encabezado del negocio, captura los datos de apertura y del vehículo, y envía la solicitud para revisión. Puede consultar sus propias solicitudes y su estado dentro del negocio.
+2. La solicitud queda **Pendiente de aprobación**. En **Solicitudes de viaje**, el administrador del mismo negocio puede abrirla, revisar y editar sus datos de apertura antes de resolverla.
+3. **Aprobar** guarda la versión revisada, crea un solo viaje y lo asigna al encargado en la misma transacción. El encargado ve los datos aprobados y el enlace al viaje en sus solicitudes.
+4. **Devolver** requiere un motivo. El encargado ve el motivo y recibe la versión revisada como borrador editable. Al corregirla y reenviarla, la solicitud vuelve a **Pendiente de aprobación**.
+5. **Cancelar solicitud** requiere motivo y confirmación. El encargado puede consultar el estado **Cancelada** y su motivo. La solicitud queda cerrada para edición, reenvío y aprobación.
+6. El historial registra actor, fecha, acción, cambios en los datos y motivo cuando corresponda. Si otra persona actualizó la solicitud desde que se abrió la revisión, la API rechaza la acción y la aplicación pide recargar la versión vigente.
 
 ## 3. Flujo operativo completo
 
 1. **Abrir el viaje.** El administrador puede abrirlo directamente o aprobar una solicitud de un encargado. Antes de abrir el expediente o capturar movimientos, el administrador registra los datos de apertura. Si el encargado solicita el viaje, captura estos mismos datos en la solicitud para que el administrador los revise antes de abrir el expediente. Identificar cliente, producto y variedad, fecha, kilos previstos y precio de venta pactado. Registrar como datos obligatorios el chofer, las placas, el tipo de vehículo y la cantidad de canastos. El campo **Tipo de vehículo** muestra una lista de selección única con las opciones **Torton**, **Rabón**, **Camioneta** y **Jaula**. La tara del vehículo se puede capturar en kg y puede quedar vacía. Registrar la tarifa del chofer y, cuando aplique, la tarifa de flete que pagará el cliente. Guardar las tarifas de este viaje aunque después cambien las del catálogo. El viaje puede llevar varias variedades y Sabormex pacta un solo precio de venta por tonelada para todo el viaje.
 
-2. **Planear la compra.** Capturar merma estimada, gastos previstos y meta mínima del 30% sobre ingresos. Para una carga de referencia de 20 t, diciembre tiene una merma observada de 100–300 kg (0.5%–1.5%) y mayo de 700–800 kg (3.5%–4%). Los rangos orientan la estimación por viaje. Conservar la estimación inicial y permitir simular precios alternativos de compra. Mostrar primero el precio máximo conservador por viaje, con una reserva de ISR estimada sobre la venta de piña.
+   En un viaje abierto con los datos de vehículo pendientes, el administrador del negocio o un encargado asignado puede registrar el chofer, las placas, el tipo, los canastos y la tara opcional. El administrador puede completar después los acuerdos comerciales que falten. Las placas identifican al vehículo dentro del negocio e impiden que se asigne a dos viajes abiertos a la vez. Una solicitud propone el vehículo y la aprobación confirma su disponibilidad.
+
+2. **Planear la compra.** Capturar merma estimada, gastos previstos y meta mínima del 30% sobre ingresos. Para una carga de referencia de 20 t, diciembre tiene una merma observada de 100–300 kg (0.5%–1.5%) y mayo de 700–800 kg (3.5%–4%). Los rangos orientan la estimación por viaje. Conservar la estimación inicial y permitir simular precios alternativos de compra. Al confirmar **Guardar estimación**, mostrar los resultados del viaje, incluido el tope conservador total y por tonelada, con la reserva de ISR estimada sobre la venta de piña. **Modificar estimación** precarga los datos de la versión vigente y guarda una nueva versión al confirmar. El historial conserva las versiones anteriores y la distribución sugerida de la reserva sigue usando la estimación inicial.
 
 3. **Comprar a productores.** Registrar los tickets de pesaje en finca. Cada ticket guarda folio, finca, productor, variedad, kilos, precio de compra por tonelada e importe. El precio puede variar entre tickets. Generar una sola remisión por proveedor y viaje, con un renglón por ticket y los totales de peso e importe, incluso si hay varias fincas. Las variedades iniciales son piña fresca Cayena, MD2, Champaca y Otra con descripción. Conservar el precio y la reserva pactados por compra. La reserva comercial se reparte entre todos los productores por kilos comprados, con o sin CFDI. Registrar los pagos y saldos por compra.
 
 4. **Registrar gastos y adelantos.** Capturar cada pago de corte, estiba, canastos, escalera, agua, lonches, mandados y combustible para movimientos propios. Guardar fecha, concepto, importe, beneficiario y evidencia cuando exista. Los $8,000 típicos de adelanto al chofer se registran como abono al flete. El combustible del camión forma parte del flete. El combustible que el comercializador paga para sus mandados se registra como gasto propio. Los demás gastos se capturan como desembolsos realizados. El saldo de flete al chofer queda pendiente hasta su liquidación contra el ticket. Los encargados capturan desde su celular en viajes asignados. Si hay una falla de red u otro impedimento, reportan el gasto por mensaje o llamada y el administrador lo captura indicando el origen. Solo los gastos aprobados se suman al costo y al margen.
 
-5. **Despachar y emitir remisión de entrega.** Generar una remisión para la empresa con folio, fecha, producto, peso consignado y precio pactado. Adjuntar el ticket de fábrica al recibirlo y registrar su peso destarado.
+   La captura de gastos generales muestra importes independientes para Corte, Estiba, Canastos y Escalera. También admite un importe para un concepto opcional de la lista Flete, Pasaje, Mandados, Combustible propio, Agua, Lunch y Otros. Cada importe capturado queda como un gasto individual para revisión. El campo Beneficiario propone el correo del encargado asignado y permite editarlo. La captura por ticket de finca conserva el concepto, la tarifa y la relación con el ticket.
+
+5. **Registrar el ticket de fábrica y emitir la remisión de entrega.** Al recibir el ticket, guardar el folio del comprobante de origen, la fecha y el peso neto mayor que cero. El apartado **Emitir remisión de entrega** aparece cuando los tres datos están completos y la API verifica el requisito al emitir. Precargar el cliente, el producto y el precio pactado desde el viaje. Proponer la fecha del ticket y usar su peso neto vigente como peso consignado al emitir.
+
+   Cada negocio lleva su propia secuencia automática exclusiva de remisiones de entrega con formato `F-1`, `F-2`, `F-3` y siguientes. El sistema asigna el folio y guarda la remisión en la misma transacción. Una emisión fallida no consume folio y un reintento devuelve la remisión existente del viaje. Los tickets conservan el folio del comprobante original. Las correcciones posteriores del ticket quedan auditadas y la remisión emitida conserva sus datos y folio.
 
 6. **Determinar la merma y liquidar al chofer.** La base del flete es el peso del ticket. Restar del flete total los anticipos y demás abonos para obtener el saldo. Contabilizar el flete completo una sola vez en el costo. Si un anticipo supera el cargo final, mostrar el excedente como ajuste o importe por recuperar. El ticket de fábrica registra solo el peso total recibido. El desglose por variedad se obtiene de los tickets de compra. La venta, el flete a fábrica y la merma usan el peso total recibido.
 
@@ -71,7 +90,16 @@ Cada apartado y cada paso de captura permite **Volver** a la pantalla o al paso 
 
 9. **Solicitar y cobrar el flete acordado con el cliente.** Calcularlo con las toneladas recibidas y su tarifa pactada. Queda fuera de la factura del producto. Puede estar pendiente mientras se acumulan 5, 10, 15 u otro número de viajes. Al solicitarlo, seleccionar los viajes, relacionar el soporte de la solicitud y aplicar el depósito a esos saldos. El soporte operativo es una nota de remisión básica. El cobro se aplica al saldo de flete y se refleja en el total del viaje. El alcance del sistema para este flete es el historial operativo y el cuadre del viaje. Su documentación y tratamiento fiscal se revisan fuera del sistema.
 
-10. **Consultar y cerrar.** Mostrar por viaje el plan y el resultado real, compras y gastos, flete pagado al chofer, saldo por cobrar de producto y saldo por cobrar de flete. La situación operativa, el resultado económico, la facturación y la cobranza deben poder avanzar en fechas distintas. El cierre operativo requiere entrega confirmada, flete al chofer calculado y aprobación administrativa de todos los gastos. La factura de piña y el flete por cobrar pueden seguir pendientes después del cierre. Solo el administrador puede agregar un gasto después del cierre, con fecha, importe y motivo. El importe aprobado actualiza el costo y el margen sin reabrir la operación.
+10. **Consultar y cerrar.** Mostrar por viaje el plan y el resultado real, compras y gastos, flete pagado al chofer, saldo por cobrar de producto y saldo por cobrar de flete. El expediente recupera los datos guardados para ese viaje por cualquier persona autorizada que los haya capturado. Los encargados consultan únicamente los viajes asignados y los datos que su rol permite. Administración consulta el expediente completo de su negocio. La situación operativa, el resultado económico, la facturación y la cobranza deben poder avanzar en fechas distintas. El cierre operativo requiere entrega confirmada, flete al chofer calculado y aprobación administrativa de todos los gastos. La factura de piña y el flete por cobrar pueden seguir pendientes después del cierre. Solo el administrador puede agregar un gasto después del cierre, con fecha, importe y motivo. El importe aprobado actualiza el costo y el margen sin reabrir la operación.
+
+### Cierre o reasignación del viaje
+
+En **Cerrar operación**, el administrador elige **Cerrar** o **Reasignar como nueva solicitud**. **Cerrar** aplica las validaciones normales y deja el viaje **Cerrado**.
+
+1. **Reasignar como nueva solicitud** requiere un motivo y un encargado activo del mismo negocio. Se precarga al responsable actual si sigue activo. El administrador puede elegir a otro encargado. Cuando hay varios encargados y ninguno está identificado como responsable, el administrador debe elegir uno.
+2. El sistema marca el viaje original como **Reasignado**, bloquea nuevas capturas en su expediente y crea una solicitud vinculada en estado **Pendiente de corrección**, todo en la misma transacción. Esta opción está disponible aunque el viaje todavía no cumpla los requisitos del cierre normal. Un reintento devuelve la solicitud ya creada.
+3. El encargado recibe los datos de apertura anteriores como borrador editable y puede modificarlos antes de reenviar la solicitud. El folio anterior se muestra como referencia y el nuevo viaje requiere un folio propio. Al aprobar se verifica la disponibilidad del vehículo. El viaje original deja de ocupar las placas al quedar **Reasignado**.
+4. Los gastos, abonos, tickets y remisiones del viaje original se muestran como referencia de solo lectura según los permisos del usuario. Los comprobantes e importes se conservan en el viaje original. El nuevo viaje registra sus propios movimientos y los importes de referencia quedan fuera de sus cálculos.
 
 ### Aprobación y costos por ticket
 
@@ -83,7 +111,7 @@ Mostrar el peso y la tarifa sugerida al capturar. Las tarifas pueden configurars
 
 Al cerrar el trato quedan fijos el precio pactado del viaje, el precio de compra y la reserva pactada con cada productor. Una oferta posterior de Sabormex, al alza o a la baja, no modifica esos acuerdos. Si se renegocia, cancelar el viaje y crear otro con sus propios acuerdos. El historial conserva el original y su vínculo con el nuevo.
 
-Al cancelar, el usuario decide por cada gasto o adelanto si queda como pérdida o se traslada al nuevo viaje. Registrar el origen y el destino. Un importe trasladado cuenta en el viaje nuevo y no genera pérdida en el cancelado. Los datos relevantes del viaje cancelado pueden pasar al nuevo como referencia para el nuevo acuerdo.
+En el flujo de cancelación por renegociación, el usuario decide por cada gasto o adelanto si queda como pérdida o se traslada al nuevo viaje. Registrar el origen y el destino. Un importe trasladado cuenta en el viaje nuevo y no genera pérdida en el cancelado. Los datos relevantes del viaje cancelado pueden pasar al nuevo como referencia para el nuevo acuerdo. La reasignación desde **Cerrar operación** se rige por el flujo de reasignación y conserva sus movimientos como referencia de solo lectura.
 
 ## 4. Reglas de cálculo y control
 
@@ -146,7 +174,8 @@ Una base relacional permite conservar los vínculos entre viajes, documentos y m
 |---|---|
 | `terceros`, `fincas`, `productos`, `vehiculos` | Roles de productor, cliente, transportista o prestador. Catálogos operativos y fiscales con acceso por rol. |
 | `viajes`, `estimaciones_viaje` | Cliente, producto, fechas, tarifas pactadas, chofer, placas, tipo de vehículo, cantidad de canastos y tara opcional en kg. Historial de escenarios de peso, merma, gastos y margen. |
-| `compras`, `remisiones_compra`, `remisiones_entrega` | Varias compras por viaje. Una remisión por proveedor y viaje, con renglones por ticket y una remisión de entrega por viaje en el flujo definido. |
+| `compras`, `remisiones_compra`, `remisiones_entrega` | Varias compras por viaje. Una remisión por proveedor y viaje, con renglones por ticket y una remisión de entrega por viaje con folio consecutivo único dentro del negocio. |
+| `tickets_fabrica`, `consecutivos_remision_entrega` | Ticket de fábrica vinculado directamente al viaje. Un contador por negocio asigna el folio de entrega en la transacción de emisión. |
 | `recepciones`, `comprobantes_recepcion` | Recepción vigente por viaje con peso confirmado. Evidencias de ticket y correo, fecha, SAP, orden de compra y monto. Conservar correcciones y una referencia al renglón de origen. |
 | `gastos`, `fletes_chofer` | Costos individuales por viaje, beneficiario y evidencias. El flete conserva su tarifa, peso base e importe. |
 | `cuentas_por_pagar`, `cuentas_por_cobrar` | Obligaciones ligadas a compras, gastos y flete del chofer. Derechos de cobro del cliente diferenciados por producto y flete. |
@@ -155,7 +184,7 @@ Una base relacional permite conservar los vínculos entre viajes, documentos y m
 | `adjuntos`, `eventos_auditoria` | Archivos originales, responsable, fechas, historial de cambios y motivo de ajustes. |
 | `adelantos_cliente`, `aplicaciones_adelanto`, `devoluciones_adelanto`, `traslados_gasto` | Crédito por cliente y temporada de origen. Aplicaciones a facturas de piña o al encabezado de una remisión de flete. Devoluciones, saldo y trazabilidad por gasto trasladado entre viajes. |
 | `negocios`, `usuarios`, `membresias`, `asignaciones_viaje` | Registro independiente por negocio, estado de aprobación, roles y asignaciones. |
-| `solicitudes_viaje` | Negocio, encargado solicitante, datos de apertura, estado, fechas, administrador revisor, motivo de devolución y vínculo único con el viaje aprobado. |
+| `solicitudes_viaje` | Negocio, encargado solicitante, datos de apertura, estado, fechas, administrador revisor, motivo de devolución o cancelación, versión para controlar revisiones simultáneas, vínculo único con el viaje aprobado y vínculo único con el viaje original cuando proviene de una reasignación. |
 | `tickets_finca`, `tarifas_gasto`, `revisiones_gasto` | Evidencia de pesaje en finca, tarifas por concepto y ámbito, aprobación y cambios auditados. Una combinación de ticket y concepto admite un gasto. |
 
 **Integridad.** Usar decimales de precisión fija para pesos, tarifas e importes. Definir políticas de redondeo y almacenar moneda. Validar folios dentro de su ámbito y evitar duplicados de recepciones por referencias de origen. Guardar la asignación y actualizar el saldo en una misma transacción. Limitar los importes aplicados al monto disponible y registrar excedentes aparte. Conservar el historial al corregir pesos, tarifas, documentos y pagos.
@@ -193,6 +222,20 @@ Referencias oficiales para esa etapa: [SAT](https://www.sat.gob.mx/), [Código F
 | Facturación y cobro de producto | Una factura cubre dos viajes. Un depósito parcial o agrupado se aplica con importes identificables y deja los saldos correctos. |
 | Flete por cobrar al cliente | A $850/t, una entrega de 20 t genera $17,000 de saldo de flete. Se pueden agrupar viajes en una solicitud y liquidarlos conservando sus saldos individuales. |
 | Expediente fiscal | Se importa un XML una sola vez, se vincula con las operaciones correspondientes y se conserva el historial de ajustes y revisión. |
+
+### Criterios de aceptación para el panel y la emisión de remisiones
+
+- Al entrar como administrador se ven los accesos **Viajes**, **Solicitudes de viaje** y **Empleados**. Al seleccionar otro viaje se sustituye el anterior. El enlace de una solicitud aprobada abre su viaje. Cancelar el regreso conserva el borrador.
+- Con más de 20 empleados, la tabla pagina desde la base y conserva la selección entre páginas. Los modales permiten agregar una cuenta, editar el permiso y confirmar bajas. Un usuario de otro negocio queda excluido. Una baja múltiple con una fila no autorizada conserva todas las membresías y asignaciones.
+- Guardar la primera estimación muestra los resultados del viaje. Modificarla precarga la última versión, muestra los resultados recalculados al guardar y conserva las versiones anteriores. El expediente recupera las capturas previas de otras personas autorizadas según los permisos del lector.
+- Un ticket de fábrica incompleto oculta el apartado de emisión y la API rechaza la solicitud. Un ticket completo permite precargar la fecha y el peso neto junto con los datos pactados. Dos emisiones simultáneas del mismo negocio reciben folios distintos y consecutivos. Los negocios llevan secuencias independientes y los fallos y reintentos no consumen folios adicionales.
+
+### Criterios de aceptación para solicitudes y reasignación
+
+- La edición administrativa se refleja en los datos que consulta el encargado después de aprobar o devolver la solicitud. La devolución muestra el motivo y permite corregir y reenviar. La cancelación muestra el motivo y bloquea nuevas acciones sobre la solicitud.
+- Un usuario de otro negocio queda excluido. Una revisión desactualizada exige recargar. Dos aprobaciones simultáneas crean un solo viaje asignado al encargado.
+- El cierre normal exige completar las validaciones de recepción y gastos. La reasignación de un viaje que aún no cumple esas validaciones marca el original como **Reasignado**, bloquea nuevas capturas y genera una sola solicitud **Pendiente de corrección**, incluso si se reintenta la acción.
+- La reasignación propone al responsable activo y permite elegir a otro encargado del negocio. El encargado edita los datos de apertura precargados sin afectar el expediente original. Al aprobar la solicitud se crea un viaje con folio propio y sin duplicar gastos, abonos ni comprobantes.
 
 ### Pruebas de las reglas validadas
 
@@ -243,6 +286,14 @@ Incorporar la exportación de datos o reportes por negocio, incluida la posibili
 | Publicación posterior | Vercel para la web, Railway para la API y Supabase en la nube. Pruebas y producción tendrán bases, usuarios y archivos separados. |
 
 **Límite entre la web y el backend.** La web valida formatos para ayudar a capturar. La API determina si una operación procede, calcula importes y aplica las reglas. Una futura app móvil podrá utilizar el mismo contrato sin reimplementar la lógica. La primera versión usa conexión a internet; si el encargado no tiene acceso, reporta el gasto por mensaje o llamada y lo captura el administrador.
+
+### Migración del flujo de remisiones
+
+Usar una migración nueva que vincule el ticket de fábrica directamente al viaje y preserve los tickets y las remisiones existentes. Inicializar el contador de cada negocio después del mayor folio histórico con formato `F-n`. Si el negocio carece de folios con ese formato, iniciar en `F-1`. Conservar los folios ya emitidos, incluidos los que usan otro formato.
+
+### Migración de solicitudes y reasignaciones
+
+Usar una migración nueva para incorporar el estado **Reasignado** en viajes y los estados **Pendiente de corrección** y **Cancelada** en solicitudes. Registrar el vínculo de origen y proteger su unicidad para impedir dos solicitudes de reasignación del mismo viaje. Conservar las solicitudes, asignaciones e historiales existentes. Verificar los permisos y las transiciones con cuentas de demostración en Supabase local.
 
 ### Prueba en el Mac
 

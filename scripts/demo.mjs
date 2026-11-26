@@ -27,10 +27,14 @@ try {
     const owner = await account('admin.' + key + '@campo.test');
     const worker = await account('encargado.' + key + '@campo.test');
     await sql.begin(async tx => {
-      await tx`insert into campo.businesses (name,owner_id,status) values (${name},${owner},'aprobado')
-        on conflict (owner_id) do nothing`;
-      const [{ id }] = await tx`select id from campo.businesses where owner_id=${owner}`;
-      await tx`insert into campo.members values (${id},${owner},'administrador'),(${id},${worker},'encargado')
+      let [business] = await tx`select id from campo.businesses where owner_id=${owner} and deleted_at is null`;
+      if (!business) {
+        [business] = await tx`insert into campo.businesses (name,owner_id,status)
+          values (${name},${owner},'aprobado') returning id`;
+      }
+      const { id } = business;
+      await tx`insert into campo.members (business_id,user_id,role,can_manage_workers)
+        values (${id},${owner},'administrador',true),(${id},${worker},'encargado',false)
         on conflict do nothing`;
       for (const number of [1, 2]) {
         const reference = 'DEMO-' + key.toUpperCase() + '-' + number;

@@ -26,3 +26,12 @@ article { padding: .75rem 0; border-top: 1px solid #c6d7cb; }
 .indicadores dd { margin: .4rem 0 0; font-size: 1.2rem; font-weight: 700; }
 .accion { border-top: 1px solid #e1e9e2; padding-block: .6rem; }
 .accion summary { cursor: pointer; }
+.acciones { display: flex; flex-wrap: wrap; gap: .5rem; }
+.captura > h4, .captura > .acciones { grid-column: 1 / -1; }
+.captura > h4 { margin: 0; }
+.casilla { display: flex; align-items: center; gap: .5rem; }
+.volver { display: inline-grid; place-items: center; width: 2.25rem; min-height: 2.25rem; padding: 0; font-size: 1.35rem; line-height: 1; flex: none; }
+.encabezado-negocio { display: flex; align-items: center; flex-wrap: wrap; gap: .65rem; }
+.encabezado-negocio h2 { flex: 1; margin: 0; overflow-wrap: anywhere; }
+.captura > fieldset { grid-column: 1 / -1; min-width: 0; margin: 0; border: 1px solid #c6d7cb; border-radius: .4rem; }
+.captura > fieldset > .captura { margin-top: .25rem; }

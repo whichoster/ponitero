@@ -11,6 +11,12 @@ const dinero = decimal(2);
 const peso = decimal(3).refine(value => Number(value) > 0);
 const tarifa = decimal(4);
 
+const gasto = z.object({
+  ticket: z.uuid().optional(), concepto: texto, fecha: z.iso.date(),
+  beneficiario: z.string().trim().min(1).max(254), tarifa: tarifa.optional(), importe: dinero,
+  origen: z.enum(['directo','mensaje','llamada']), motivo: texto.optional(),
+});
+
 export const operacion = z.discriminatedUnion('accion', [
   z.object({ accion: z.literal('acuerdos'), fecha: z.iso.date(), producto: texto,
     chofer: texto, vehiculo: texto, placas: texto, venta: tarifa, fleteChofer: tarifa, fleteCliente: tarifa }),
@@ -18,9 +24,19 @@ export const operacion = z.discriminatedUnion('accion', [
   z.object({ accion: z.literal('compra'), folio: texto, finca: texto, productor: texto,
     variedad: z.enum(['Cayena','MD2','Champaca','Otra']), descripcion: texto.optional(),
     kg: peso, tarifa, reserva: dinero }),
-  z.object({ accion: z.literal('gasto'), ticket: z.uuid().optional(), concepto: texto,
-    fecha: z.iso.date(), beneficiario: texto, tarifa: tarifa.optional(), importe: dinero,
-    origen: z.enum(['directo','mensaje','llamada']), motivo: texto.optional() }),
+  gasto.extend({ accion: z.literal('gasto') }),
+  z.object({
+    accion: z.literal('gastos'),
+    ...gasto.pick({ fecha: true, beneficiario: true, origen: true, motivo: true }).shape,
+    partidas: z.array(z.object({
+      concepto: z.enum(['corte','estiba','canastos','escalera','flete local','pasaje','mandados','combustible propio','agua','lonches','otro']),
+      importe: dinero.refine(value => Number(value) > 0),
+    })).min(1).max(5).refine(partidas => {
+      const conceptos = partidas.map(item => item.concepto);
+      return new Set(conceptos).size === conceptos.length &&
+        conceptos.filter(concepto => !['corte','estiba','canastos','escalera'].includes(concepto)).length <= 1;
+    }),
+  }),
   z.object({ accion: z.literal('revision'), gasto: z.uuid(), estado: z.enum(['aprobado','devuelto']),
     importe: dinero, motivo: texto }),
   z.object({ accion: z.literal('entrega'), folio: texto, fecha: z.iso.date(), kg: peso }),
@@ -106,7 +122,7 @@ export async function registrarOperacion(
   sql: Sql, viaje: string, negocio: string, datos: z.infer<typeof operacion>, rol: string,
 ) {
   const [actual] = await sql`select customer,acuerdos,cerrado_en from campo.trips where id=${viaje} for update`;
-  if (actual.cerrado_en && !['gasto','revision','abono'].includes(datos.accion)) {
+  if (actual.cerrado_en && !['gasto','gastos','revision','abono'].includes(datos.accion)) {
     throw new ConflictException('El viaje ya está cerrado.');
   }
   if (datos.accion !== 'acuerdos' && !actual.acuerdos) {
@@ -128,26 +144,34 @@ export async function registrarOperacion(
         ${datos.descripcion && datos.variedad === 'Otra' ? datos.descripcion : datos.variedad},
         ${datos.kg},${datos.tarifa},${datos.reserva})`;
       break;
-    case 'gasto': {
-      const concepto = datos.concepto.toLocaleLowerCase('es-MX');
-      if (concepto === 'combustible del camión') throw new BadRequestException('Registra ese pago como abono al flete.');
+    case 'gasto':
+    case 'gastos': {
       if (actual.cerrado_en && (!datos.motivo || rol === 'encargado')) {
         throw new ConflictException('Un gasto posterior al cierre requiere captura administrativa y motivo.');
       }
       if (rol === 'encargado' && datos.origen !== 'directo') throw new BadRequestException('El origen reportado se captura por administración.');
-      if (datos.ticket) {
-        const [ticket] = await sql`select id from campo.compras where viaje=${viaje} and id=${datos.ticket}`;
-        if (!ticket || !datos.tarifa || !['corte','estiba','flete local','vaciado','pasaje'].includes(concepto)) {
-          throw new BadRequestException('Verifica el ticket, el concepto y la tarifa por tonelada.');
+      const partidas: Pick<z.infer<typeof gasto>, 'concepto' | 'importe' | 'ticket' | 'tarifa'>[] =
+        datos.accion === 'gasto' ? [datos] : datos.partidas;
+      const cambios = [];
+      for (const partida of partidas) {
+        const concepto = partida.concepto.toLocaleLowerCase('es-MX');
+        if (concepto === 'combustible del camión') throw new BadRequestException('Registra ese pago como abono al flete.');
+        if (partida.ticket) {
+          if (!partida.tarifa || !['corte','estiba','flete local','vaciado','pasaje'].includes(concepto)) {
+            throw new BadRequestException('Verifica el concepto y la tarifa por tonelada.');
+          }
+          const [ticket] = await sql`select round(kg*${partida.tarifa}::numeric/1000,2)=${partida.importe}::numeric coincide
+            from campo.compras where viaje=${viaje} and id=${partida.ticket}`;
+          if (!ticket) throw new BadRequestException('Verifica el ticket de finca.');
+          if (!ticket.coincide && !datos.motivo) throw new BadRequestException('Indica el motivo del ajuste de importe.');
         }
-        const [importe] = await sql`select round(kg*${datos.tarifa}::numeric/1000,2)=${datos.importe}::numeric coincide
-          from campo.compras where id=${ticket.id}`;
-        if (!importe.coincide && !datos.motivo) throw new BadRequestException('Indica el motivo del ajuste de importe.');
+        const [registro] = await sql`insert into campo.gastos(viaje,ticket,concepto,fecha,beneficiario,tarifa,importe,origen,motivo)
+          values(${viaje},${partida.ticket ?? null},${concepto},${datos.fecha},${datos.beneficiario},
+          ${partida.tarifa ?? null},${partida.importe},${datos.origen},${datos.motivo ?? null})
+          returning id,concepto,importe`;
+        cambios.push(registro);
       }
-      await sql`insert into campo.gastos(viaje,ticket,concepto,fecha,beneficiario,tarifa,importe,origen,motivo)
-        values(${viaje},${datos.ticket ?? null},${concepto},${datos.fecha},${datos.beneficiario},
-        ${datos.tarifa ?? null},${datos.importe},${datos.origen},${datos.motivo ?? null})`;
-      break;
+      return { gastos: cambios };
     }
     case 'revision': {
       const [previo] = await sql`select estado,importe from campo.gastos where viaje=${viaje} and id=${datos.gasto}`;

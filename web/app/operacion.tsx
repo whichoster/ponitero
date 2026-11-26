@@ -2,9 +2,13 @@
 
 import { useEffect, useState, type FormEvent } from 'react';
 
+import { Volver } from './volver';
+import { confirmarSalida } from './apertura';
+
 type Fila = Record<string, string | null>;
 type Expediente = {
   resumen: Omit<Fila, 'acuerdos'> & { acuerdos?: boolean | { producto: string; venta: string } };
+  beneficiario: string;
   planes?: Fila[];
   compras: Fila[];
   remisiones?: Fila[];
@@ -18,41 +22,86 @@ type Campo = [nombre: string, etiqueta: string, tipo?: 'fecha' | 'decimal' | 'op
 const fecha: Campo = ['fecha', 'Fecha', 'fecha'];
 const motivo: Campo = ['motivo', 'Motivo'];
 const importe: Campo = ['importe', 'Importe en MXN', 'decimal'];
+const gastosFijos = ['Corte', 'Estiba', 'Canastos', 'Escalera'];
+const gastosOpcionales = [
+  ['flete local', 'Flete'], ['pasaje', 'Pasaje'], ['mandados', 'Mandados'],
+  ['combustible propio', 'Combustible propio'], ['agua', 'Agua'], ['lonches', 'Lunch'], ['otro', 'Otros'],
+];
 const pesos = new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' });
 
-function Formulario({ titulo, accion, campos, enviar, inicial, tickets }: {
+function Formulario({ titulo, accion, campos, enviar, inicial, tickets, beneficiario }: {
   titulo: string; accion: string; campos: Campo[];
-  enviar: (datos: object) => Promise<boolean>; inicial?: object; tickets?: Fila[];
+  enviar: (datos: object) => Promise<boolean>; inicial?: object; tickets?: Fila[]; beneficiario?: string;
 }) {
   const [guardando, setGuardando] = useState(false);
+  const [conceptoOpcional, setConceptoOpcional] = useState('');
   async function guardar(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
     const valores = Object.fromEntries([...new FormData(form)].filter(([, value]) => value !== ''));
+    const partidas = gastosFijos.flatMap(etiqueta => {
+      const concepto = etiqueta.toLowerCase();
+      return valores[concepto] ? [{ concepto, importe: valores[concepto] }] : [];
+    });
+    if (conceptoOpcional && valores.importeOpcional) {
+      partidas.push({ concepto: conceptoOpcional, importe: valores.importeOpcional });
+    }
     setGuardando(true);
     try {
-      if (await enviar({ accion, ...inicial, ...valores })) form.reset();
+      if (await enviar({ accion, ...inicial, ...valores, ...(accion === 'gastos' && { partidas }) })) {
+        form.reset();
+        setConceptoOpcional('');
+        delete form.dataset.dirty;
+      }
     } finally {
       setGuardando(false);
     }
   }
 
-  return <details className="accion"><summary>{titulo}</summary>
+  return <details className="accion"><summary onClick={event => {
+    const panel = event.currentTarget.parentElement;
+    if (panel?.hasAttribute('open') && panel.querySelector('[data-dirty="true"]')) event.preventDefault();
+  }}>{titulo}</summary>
     <form className="captura" onSubmit={guardar}>
       {campos.map(([nombre, etiqueta, tipo]) => <label key={nombre}>{etiqueta}
         {Array.isArray(tipo) ? <select name={nombre} required>
           {tipo.map(opcion => <option key={opcion}>{opcion}</option>)}
-        </select> : <input name={nombre} required={tipo !== 'opcional'}
+        </select> : <input name={nombre} defaultValue={nombre === 'beneficiario' ? beneficiario : undefined} required={tipo !== 'opcional'}
           type={tipo === 'fecha' ? 'date' : 'text'}
-          inputMode={tipo === 'decimal' ? 'decimal' : undefined} maxLength={200} />}
+          inputMode={tipo === 'decimal' ? 'decimal' : undefined} maxLength={nombre === 'beneficiario' ? 254 : 200} />}
       </label>)}
-      {tickets && <label>Ticket de finca<select name="ticket">
-        <option value="">Gasto general</option>
+      {accion === 'gastos' && <fieldset>
+        <legend>Importes en MXN</legend>
+        <div className="captura">
+          {gastosFijos.map(etiqueta => <label key={etiqueta}>{etiqueta}
+            <input name={etiqueta.toLowerCase()} inputMode="decimal" pattern="[0-9]{1,9}([.][0-9]{1,2})?" />
+          </label>)}
+          <label>Concepto opcional<select value={conceptoOpcional} onChange={event => setConceptoOpcional(event.target.value)}>
+            <option value="">Selecciona un concepto</option>
+            {gastosOpcionales.map(([valor, etiqueta]) => <option key={valor} value={valor}>{etiqueta}</option>)}
+          </select></label>
+          {conceptoOpcional && <label>Importe del concepto opcional
+            <input key={conceptoOpcional} name="importeOpcional" required inputMode="decimal" pattern="[0-9]{1,9}([.][0-9]{1,2})?" />
+          </label>}
+        </div>
+      </fieldset>}
+      {tickets && <label>Ticket de finca<select name="ticket" required>
+        <option value="">Selecciona un ticket</option>
         {tickets.map(ticket => <option key={ticket.id} value={ticket.id ?? ''}>
           {ticket.folio} · {ticket.finca} · {ticket.kg} kg
         </option>)}
       </select></label>}
-      <button disabled={guardando}>{guardando ? 'Guardando…' : 'Guardar'}</button>
+      <div className="acciones">
+        <Volver disabled={guardando} onClick={event => {
+          const form = event.currentTarget.form;
+          if (!form || (form.dataset.dirty === 'true' && !confirmarSalida())) return;
+          form.reset();
+          setConceptoOpcional('');
+          delete form.dataset.dirty;
+          form.closest('details')?.removeAttribute('open');
+        }} />
+        <button disabled={guardando}>{guardando ? 'Guardando…' : 'Guardar'}</button>
+      </div>
     </form>
   </details>;
 }
@@ -88,7 +137,11 @@ export function Operacion({ cargar, registrar, administra }: {
   const resumen = datos?.resumen;
   const cerrado = Boolean(resumen?.cerrado_en);
   const plan = datos?.planes?.at(-1);
-  const conceptos = ['corte','estiba','flete local','vaciado','pasaje','canastos','escalera','agua','lonches','mandados','combustible propio','otro'];
+  const camposGasto: Campo[] = [
+    fecha, ['beneficiario','Beneficiario'],
+    ['origen','Origen',administra ? ['directo','mensaje','llamada'] : ['directo']],
+    cerrado ? motivo : ['motivo','Motivo de ajuste','opcional'],
+  ];
 
   return <section className="operacion">
     {mensaje && <p role="status">{mensaje}</p>}
@@ -137,10 +190,6 @@ export function Operacion({ cargar, registrar, administra }: {
           <p>Total {remision.kg} kg · {pesos.format(Number(remision.importe))} · Reserva pactada {pesos.format(Number(remision.reserva))}</p>
         </details>)}
       </>}
-      {administra && !resumen.acuerdos && <Formulario titulo="Fijar acuerdos" accion="acuerdos" enviar={enviar}
-        campos={[fecha, ['producto','Producto'], ['chofer','Chofer'], ['vehiculo','Vehículo'], ['placas','Placas'],
-          ['venta','Precio de venta por tonelada','decimal'], ['fleteChofer','Tarifa al chofer por tonelada','decimal'],
-          ['fleteCliente','Flete al cliente por tonelada (0 si no aplica)','decimal']]} />}
       {administra && resumen.acuerdos && !cerrado && <>
         <Formulario titulo="Guardar estimación" accion="plan" enviar={enviar}
           campos={ [['kg','Compra prevista en kg','decimal'], ['merma','Merma estimada (%)','decimal'], ['gastos','Otros gastos previstos (MXN)','decimal'], ['oferta','Oferta a simular por tonelada','opcional']] } />
@@ -160,10 +209,14 @@ export function Operacion({ cargar, registrar, administra }: {
             ...(datos.recepcion ? [motivo] : [])] } />}
         <Formulario titulo="Cerrar operación" accion="cierre" enviar={enviar} campos={[motivo]} />
       </>}
-      {resumen.acuerdos && (administra || !cerrado) && <Formulario titulo="Capturar gasto" accion="gasto" enviar={enviar}
-        tickets={datos.compras} campos={[fecha, ['concepto','Concepto',conceptos], ['beneficiario','Beneficiario'], importe,
-          ['tarifa','Tarifa por tonelada (para ticket)','opcional'], ['origen','Origen',administra ? ['directo','mensaje','llamada'] : ['directo']],
-          cerrado ? motivo : ['motivo','Motivo de ajuste','opcional']]} />}
+      {resumen.acuerdos && (administra || !cerrado) && <>
+        <Formulario titulo="Capturar gasto" accion="gastos" enviar={enviar}
+          beneficiario={datos.beneficiario} campos={camposGasto} />
+        {datos.compras.length > 0 && <Formulario titulo="Capturar gasto por ticket de finca" accion="gasto" enviar={enviar}
+          beneficiario={datos.beneficiario} tickets={datos.compras}
+          campos={[...camposGasto, ['concepto','Concepto',['corte','estiba','flete local','vaciado','pasaje']],
+            importe, ['tarifa','Tarifa por tonelada','decimal']]} />}
+      </>}
       {administra && resumen.acuerdos && <Formulario titulo="Abonar al flete del chofer" accion="abono" enviar={enviar}
         campos={[fecha, importe, ['referencia','Referencia']]} />}
       {administra && datos.gastos?.map(gasto => <Formulario key={gasto.id} titulo={

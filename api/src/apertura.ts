@@ -38,7 +38,7 @@ export function acuerdosDeApertura(datos: Apertura) {
 // Las operaciones que asignan placas toman el bloqueo exclusivo del negocio.
 export async function verificarPlacas(sql: postgres.TransactionSql, negocio: string, placas: string, viaje?: string) {
   const [ocupado] = await sql`select 1 from campo.trips
-    where business_id=${negocio} and cerrado_en is null
+    where business_id=${negocio} and cerrado_en is null and reasignado_en is null
       and id is distinct from ${viaje ?? null}::uuid
       and upper(regexp_replace(coalesce(apertura->>'placas', acuerdos->>'placas'), '[[:space:]-]+', '', 'g')) =
         upper(regexp_replace(${placas}, '[[:space:]-]+', '', 'g')) limit 1`;

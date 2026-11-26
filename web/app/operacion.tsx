@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 
 import { Volver } from './volver';
 import { confirmarSalida } from './apertura';
@@ -29,9 +29,9 @@ const gastosOpcionales = [
 ];
 const pesos = new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' });
 
-function Formulario({ titulo, accion, campos, enviar, inicial, tickets, beneficiario }: {
+function Formulario({ titulo, accion, campos, enviar, inicial, tickets, beneficiario, valoresIniciales, children, etiquetaGuardar = 'Guardar' }: {
   titulo: string; accion: string; campos: Campo[];
-  enviar: (datos: object) => Promise<boolean>; inicial?: object; tickets?: Fila[]; beneficiario?: string;
+  enviar: (datos: object) => Promise<boolean>; inicial?: object; tickets?: Fila[]; beneficiario?: string; valoresIniciales?: Fila; children?: ReactNode; etiquetaGuardar?: string;
 }) {
   const [guardando, setGuardando] = useState(false);
   const [conceptoOpcional, setConceptoOpcional] = useState('');
@@ -63,10 +63,11 @@ function Formulario({ titulo, accion, campos, enviar, inicial, tickets, benefici
     if (panel?.hasAttribute('open') && panel.querySelector('[data-dirty="true"]')) event.preventDefault();
   }}>{titulo}</summary>
     <form className="captura" onSubmit={guardar}>
+      {children}
       {campos.map(([nombre, etiqueta, tipo]) => <label key={nombre}>{etiqueta}
         {Array.isArray(tipo) ? <select name={nombre} required>
           {tipo.map(opcion => <option key={opcion}>{opcion}</option>)}
-        </select> : <input name={nombre} defaultValue={nombre === 'beneficiario' ? beneficiario : undefined} required={tipo !== 'opcional'}
+        </select> : <input name={nombre} defaultValue={nombre === 'beneficiario' ? beneficiario : valoresIniciales?.[nombre] ?? undefined} required={tipo !== 'opcional'}
           type={tipo === 'fecha' ? 'date' : 'text'}
           inputMode={tipo === 'decimal' ? 'decimal' : undefined} maxLength={nombre === 'beneficiario' ? 254 : 200} />}
       </label>)}
@@ -100,19 +101,23 @@ function Formulario({ titulo, accion, campos, enviar, inicial, tickets, benefici
           delete form.dataset.dirty;
           form.closest('details')?.removeAttribute('open');
         }} />
-        <button disabled={guardando}>{guardando ? 'Guardando…' : 'Guardar'}</button>
+        <button disabled={guardando}>{guardando ? 'Guardando…' : etiquetaGuardar}</button>
       </div>
     </form>
   </details>;
 }
 
-export function Operacion({ cargar, registrar, administra }: {
+export function Operacion({ cargar, registrar, administra, encargados, asignado, reasignar }: {
   cargar: () => Promise<Expediente>;
   registrar: (datos: object) => Promise<unknown>;
   administra: boolean;
+  encargados: { user_id: string; email: string }[];
+  asignado: string;
+  reasignar: (datos: object) => Promise<void>;
 }) {
   const [datos, setDatos] = useState<Expediente>();
   const [mensaje, setMensaje] = useState('');
+  const [reasignando, setReasignando] = useState(false);
   useEffect(() => {
     let vigente = true;
     cargar().then(resultado => { if (vigente) setDatos(resultado); }).catch(error => {
@@ -136,6 +141,7 @@ export function Operacion({ cargar, registrar, administra }: {
 
   const resumen = datos?.resumen;
   const cerrado = Boolean(resumen?.cerrado_en);
+  const reasignado = Boolean(resumen?.reasignado_en);
   const plan = datos?.planes?.at(-1);
   const camposGasto: Campo[] = [
     fecha, ['beneficiario','Beneficiario'],
@@ -147,11 +153,12 @@ export function Operacion({ cargar, registrar, administra }: {
     {mensaje && <p role="status">{mensaje}</p>}
     {!datos && !mensaje && <p>Cargando expediente…</p>}
     {datos && resumen && <>
-      <h4>{cerrado ? 'Operación cerrada' : 'Operación abierta'}</h4>
+      <h4>{reasignado ? 'Viaje reasignado' : cerrado ? 'Operación cerrada' : 'Operación abierta'}</h4>
       {administra && resumen.acuerdos && <>
         <dl className="indicadores">
           {([
             ['Tope conservador por tonelada', plan?.tope_por_tonelada],
+            ['Tope conservador total', plan?.tope_conservador],
             ['Costo operativo', resumen.costo],
             ['Resultado de producto', resumen.resultado_producto],
             ['Resultado con flete', resumen.resultado_total],
@@ -190,26 +197,65 @@ export function Operacion({ cargar, registrar, administra }: {
           <p>Total {remision.kg} kg · {pesos.format(Number(remision.importe))} · Reserva pactada {pesos.format(Number(remision.reserva))}</p>
         </details>)}
       </>}
-      {administra && resumen.acuerdos && !cerrado && <>
-        <Formulario titulo="Guardar estimación" accion="plan" enviar={enviar}
+      {administra && resumen.acuerdos && !cerrado && !reasignado && <>
+        <Formulario key={plan?.id ?? 'primera-estimacion'} titulo={plan ? 'Modificar estimación' : 'Guardar estimación'}
+          etiquetaGuardar="Guardar estimación" accion="plan" enviar={enviar} valoresIniciales={plan}
           campos={ [['kg','Compra prevista en kg','decimal'], ['merma','Merma estimada (%)','decimal'], ['gastos','Otros gastos previstos (MXN)','decimal'], ['oferta','Oferta a simular por tonelada','opcional']] } />
         <Formulario titulo="Agregar ticket de finca" accion="compra" enviar={enviar}
           campos={ [['folio','Folio'], ['finca','Finca'], ['productor','Productor'],
             ['variedad','Variedad',['Cayena','MD2','Champaca','Otra']], ['descripcion','Descripción de otra variedad','opcional'],
             ['kg','Peso en kg','decimal'], ['tarifa','Compra por tonelada','decimal'], ['reserva','Reserva pactada (MXN)','decimal']] } />
-        {!datos.entrega && <Formulario titulo="Emitir remisión de entrega" accion="entrega" enviar={enviar}
-          campos={[fecha, ['folio','Folio de remisión'], ['kg','Peso consignado (kg)','decimal']]} />}
-        {datos.entrega && <Formulario titulo={datos.ticketFabrica ? 'Corregir ticket de fábrica' : 'Registrar ticket de fábrica'}
-          accion="ticketFabrica" enviar={enviar} campos={[fecha, ['folio','Folio del ticket'], ['kg','Peso neto (kg)','decimal'],
-            ...(datos.ticketFabrica ? [motivo] : [])]} />}
+        <Formulario key={datos.ticketFabrica ? 'corregir-ticket' : 'registrar-ticket'}
+          titulo={datos.ticketFabrica ? 'Corregir ticket de fábrica' : 'Registrar ticket de fábrica'}
+          accion="ticketFabrica" enviar={enviar} valoresIniciales={datos.ticketFabrica} campos={[fecha,
+            ['folio','Folio del ticket'], ['kg','Peso neto (kg)','decimal'], ...(datos.ticketFabrica ? [motivo] : [])]} />
+        {!datos.entrega && datos.ticketFabrica?.folio?.trim() && datos.ticketFabrica.fecha && Number(datos.ticketFabrica.kg) > 0 &&
+          typeof resumen.acuerdos === 'object' && <Formulario titulo="Emitir remisión de entrega" accion="entrega" enviar={enviar}
+            etiquetaGuardar="Emitir remisión" campos={[fecha]} valoresIniciales={datos.ticketFabrica}>
+            <p className="ancho-completo">{resumen.customer} · {resumen.acuerdos.producto} · {datos.ticketFabrica.kg} kg · {
+              pesos.format(Number(resumen.acuerdos.venta))}/t. El folio se asigna al emitir.</p>
+          </Formulario>}
         {datos.entrega && <Formulario titulo={datos.recepcion ? 'Corregir correo de recepción' : 'Registrar correo de recepción'}
           accion="recepcion" enviar={enviar}
-          campos={ [fecha, ['folio','Folio de remisión'], ['sap','Entrada SAP'], ['orden','Orden de compra'],
+          valoresIniciales={{ ...datos.recepcion, fecha: datos.recepcion?.fecha_capturada ?? null, folio: datos.entrega.folio, kgCorreo: datos.recepcion?.kg_correo ?? null }} campos={ [fecha, ['folio','Folio de remisión'], ['sap','Entrada SAP'], ['orden','Orden de compra'],
             ['kgCorreo','Peso del correo (kg)','decimal'], ['venta','Importe confirmado de producto (MXN)','decimal'],
             ...(datos.recepcion ? [motivo] : [])] } />}
-        <Formulario titulo="Cerrar operación" accion="cierre" enviar={enviar} campos={[motivo]} />
+        <details className="accion"><summary>Cerrar operación</summary>
+          <Formulario titulo="Cerrar" etiquetaGuardar="Confirmar cierre" accion="cierre" enviar={enviar} campos={[motivo]} />
+          <details className="accion"><summary>Reasignar como nueva solicitud</summary>
+            <form className="captura" onSubmit={async event => {
+              event.preventDefault();
+              const form = event.currentTarget;
+              const valores = new FormData(form);
+              setReasignando(true);
+              setMensaje('');
+              try {
+                await reasignar({ userId: valores.get('userId'), reason: valores.get('reason') });
+                delete form.dataset.dirty;
+                setDatos(await cargar());
+                setMensaje('Viaje reasignado. La solicitud está pendiente de corrección.');
+              } catch (cause) {
+                setMensaje(cause instanceof Error ? cause.message : 'No se pudo reasignar el viaje.');
+              } finally { setReasignando(false); }
+            }}>
+              <p className="ancho-completo">El expediente original quedará como referencia de solo lectura.</p>
+              <label>Encargado<select name="userId" required defaultValue={encargados.some(item => item.user_id === asignado) ? asignado : ''}>
+                <option value="" disabled>Selecciona un encargado</option>
+                {encargados.map(item => <option key={item.user_id} value={item.user_id}>{item.email}</option>)}
+              </select></label>
+              <label>Motivo<input name="reason" minLength={3} maxLength={300} required /></label>
+              <div className="acciones"><Volver disabled={reasignando} onClick={event => {
+                const form = event.currentTarget.form;
+                if (!form || !confirmarSalida()) return;
+                form.reset();
+                delete form.dataset.dirty;
+                form.closest('details')?.removeAttribute('open');
+              }} /><button disabled={reasignando || !encargados.length}>Confirmar reasignación</button></div>
+            </form>
+          </details>
+        </details>
       </>}
-      {resumen.acuerdos && (administra || !cerrado) && <>
+      {resumen.acuerdos && !reasignado && (administra || !cerrado) && <>
         <Formulario titulo="Capturar gasto" accion="gastos" enviar={enviar}
           beneficiario={datos.beneficiario} campos={camposGasto} />
         {datos.compras.length > 0 && <Formulario titulo="Capturar gasto por ticket de finca" accion="gasto" enviar={enviar}
@@ -217,9 +263,17 @@ export function Operacion({ cargar, registrar, administra }: {
           campos={[...camposGasto, ['concepto','Concepto',['corte','estiba','flete local','vaciado','pasaje']],
             importe, ['tarifa','Tarifa por tonelada','decimal']]} />}
       </>}
-      {administra && resumen.acuerdos && <Formulario titulo="Abonar al flete del chofer" accion="abono" enviar={enviar}
+      {administra && resumen.acuerdos && !reasignado && <Formulario titulo="Abonar al flete del chofer" accion="abono" enviar={enviar}
         campos={[fecha, importe, ['referencia','Referencia']]} />}
-      {administra && datos.gastos?.map(gasto => <Formulario key={gasto.id} titulo={
+      {(reasignado || !administra) && !!datos.gastos?.length && <details><summary>Gastos registrados</summary>
+        <ul>{datos.gastos.map(gasto => <li key={gasto.id}>{gasto.concepto} · {gasto.beneficiario} · {
+          pesos.format(Number(gasto.importe))} · {gasto.estado}</li>)}</ul>
+      </details>}
+      {administra && reasignado && !!datos.abonos?.length && <details><summary>Abonos registrados</summary>
+        <ul>{datos.abonos.map(abono => <li key={abono.id}>{abono.referencia} · {
+          pesos.format(Number(abono.importe))}</li>)}</ul>
+      </details>}
+      {administra && !reasignado && datos.gastos?.map(gasto => <Formulario key={gasto.id} titulo={
         gasto.concepto + ' · ' + gasto.beneficiario + ' · ' + pesos.format(Number(gasto.importe)) + ' · ' + gasto.estado
       } accion="revision" enviar={enviar} inicial={{ gasto: gasto.id }}
         campos={ [['estado','Resultado de la revisión',['aprobado','devuelto']], importe, motivo] } />)}

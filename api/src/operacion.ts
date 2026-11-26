@@ -39,7 +39,7 @@ export const operacion = z.discriminatedUnion('accion', [
   }),
   z.object({ accion: z.literal('revision'), gasto: z.uuid(), estado: z.enum(['aprobado','devuelto']),
     importe: dinero, motivo: texto }),
-  z.object({ accion: z.literal('entrega'), folio: texto, fecha: z.iso.date(), kg: peso }),
+  z.object({ accion: z.literal('entrega'), fecha: z.iso.date().optional() }),
   z.object({ accion: z.literal('ticketFabrica'), folio: texto, fecha: z.iso.date(), kg: peso, motivo: texto.optional() }),
   z.object({ accion: z.literal('recepcion'), folio: texto, sap: texto, orden: texto,
     fecha: z.iso.date(), kgCorreo: peso, venta: dinero, motivo: texto.optional() }),
@@ -50,7 +50,7 @@ export const operacion = z.discriminatedUnion('accion', [
 export async function expediente(sql: Sql, viaje: string) {
   const [resumen] = await sql`
     with base as (
-      select t.acuerdos, t.cerrado_en, f.kg kg_ticket, r.kg_correo, r.venta,
+      select t.customer, t.acuerdos, t.cerrado_en, t.reasignado_en, f.kg kg_ticket, r.kg_correo, r.venta,
         coalesce(c.kg,0) kg_comprados, coalesce(c.importe,0) costo_compra,
         coalesce(g.total,0) gastos_aprobados, coalesce(g.pendientes,0) gastos_pendientes,
         coalesce(a.total,0) abonos_chofer
@@ -112,16 +112,21 @@ export async function expediente(sql: Sql, viaje: string) {
     from pesos order by productor`;
   const gastos = await sql`select * from campo.gastos where viaje=${viaje} order by fecha,id`;
   const abonos = await sql`select * from campo.abonos_chofer where viaje=${viaje} order by fecha,id`;
-  const [recepcion] = await sql`select * from campo.recepciones where viaje=${viaje}`;
-  const [entrega] = await sql`select * from campo.remisiones_entrega where viaje=${viaje}`;
-  const [ticketFabrica] = await sql`select * from campo.tickets_fabrica where viaje=${viaje}`;
+  const [recepcion] = await sql`select *, fecha::text as fecha_capturada from campo.recepciones where viaje=${viaje}`;
+  const [entrega] = await sql`select viaje,negocio,folio,fecha::text,kg from campo.remisiones_entrega where viaje=${viaje}`;
+  const [ticketFabrica] = await sql`select viaje,folio,fecha::text,kg from campo.tickets_fabrica where viaje=${viaje}`;
   return { resumen, planes, compras, remisiones, gastos, abonos, recepcion, entrega, ticketFabrica };
 }
 
 export async function registrarOperacion(
   sql: Sql, viaje: string, negocio: string, datos: z.infer<typeof operacion>, rol: string,
 ) {
-  const [actual] = await sql`select customer,acuerdos,cerrado_en from campo.trips where id=${viaje} for update`;
+  const [actual] = await sql`select customer,acuerdos,cerrado_en,reasignado_en from campo.trips where id=${viaje} for update`;
+  if (datos.accion === 'entrega') {
+    const [existente] = await sql`select viaje,negocio,folio,fecha::text,kg from campo.remisiones_entrega where viaje=${viaje}`;
+    if (existente) return { entrega: existente, existente: true };
+  }
+  if (actual.reasignado_en) throw new ConflictException('El expediente del viaje reasignado es de solo lectura.');
   if (actual.cerrado_en && !['gasto','gastos','revision','abono'].includes(datos.accion)) {
     throw new ConflictException('El viaje ya está cerrado.');
   }
@@ -179,14 +184,20 @@ export async function registrarOperacion(
       await sql`update campo.gastos set estado=${datos.estado},importe=${datos.importe} where id=${datos.gasto}`;
       return { previo, nuevo: datos };
     }
-    case 'entrega':
-      await sql`insert into campo.remisiones_entrega(viaje,negocio,folio,fecha,kg)
-        values(${viaje},${negocio},${datos.folio},${datos.fecha},${datos.kg})`;
-      break;
+    case 'entrega': {
+      const [ticket] = await sql`select fecha::text,kg from campo.tickets_fabrica
+        where viaje=${viaje} and btrim(folio)<>'' and kg>0`;
+      if (!ticket) throw new BadRequestException('Completa el ticket de fábrica antes de emitir la remisión.');
+      const [contador] = await sql`insert into campo.consecutivos_remision_entrega (negocio,ultimo)
+        values (${negocio},1) on conflict (negocio) do update
+        set ultimo=campo.consecutivos_remision_entrega.ultimo+1 returning ultimo::text`;
+      const [entrega] = await sql`insert into campo.remisiones_entrega(viaje,negocio,folio,fecha,kg)
+        values(${viaje},${negocio},${'F-' + contador.ultimo},${datos.fecha ?? ticket.fecha},${ticket.kg})
+        returning viaje,negocio,folio,fecha::text,kg`;
+      return { entrega };
+    }
     case 'ticketFabrica': {
-      const [entrega] = await sql`select folio from campo.remisiones_entrega where viaje=${viaje}`;
-      if (!entrega) throw new BadRequestException('Emite la remisión de entrega primero.');
-      const [previo] = await sql`select * from campo.tickets_fabrica where viaje=${viaje}`;
+      const [previo] = await sql`select viaje,folio,fecha::text,kg from campo.tickets_fabrica where viaje=${viaje}`;
       if (previo && !datos.motivo) throw new BadRequestException('Indica el motivo de la corrección.');
       await sql`insert into campo.tickets_fabrica(viaje,folio,fecha,kg)
         values(${viaje},${datos.folio},${datos.fecha},${datos.kg})

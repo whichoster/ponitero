@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import {
   BadRequestException, Body, ConflictException, Controller, ForbiddenException,
-  Delete, Get, Headers, HttpCode, Module, NotFoundException, Param, Patch, Post, UnauthorizedException,
+  Delete, Get, Headers, HttpCode, Module, NotFoundException, Param, Patch, Post, Query as ParamQuery, UnauthorizedException,
 } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { ApiBearerAuth, ApiBody, DocumentBuilder, SwaggerModule, type SchemaObject } from '@nestjs/swagger';
@@ -35,10 +35,14 @@ const memberInput = z.object({
 const permissionInput = z.object({ canManageWorkers: z.boolean(), reason: reasonInput });
 const removalInput = z.object({ reason: reasonInput });
 const deletionInput = removalInput.extend({ confirm: z.literal(true) });
+const bulkRemoval = removalInput.extend({ userIds: z.array(uuid).min(1).refine(ids => new Set(ids).size === ids.length) });
+const revisionBase = z.object({ version: z.number().int().positive() });
 const reviewInput = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('aprobar') }),
-  z.object({ action: z.literal('devolver'), reason: reasonInput }),
+  revisionBase.extend({ action: z.literal('aprobar'), datos: apertura.optional() }),
+  revisionBase.extend({ action: z.literal('devolver'), reason: reasonInput, datos: apertura.optional() }),
+  revisionBase.extend({ action: z.literal('cancelar'), reason: reasonInput, confirm: z.literal(true) }),
 ]);
+const reassignmentInput = removalInput.extend({ userId: uuid });
 const assignmentInput = z.object({ userId: uuid });
 const input = (schema: z.ZodType) => ApiBody({ schema: z.toJSONSchema(schema) as SchemaObject });
 
@@ -79,6 +83,11 @@ async function access(sql: Query, businessId: string, userId: string, write: boo
   const role = superAdmin ? 'superadministrador' : member.role;
   if (write && role === 'encargado') throw new ForbiddenException('Operación reservada al administrador.');
   return { role, canManageWorkers: superAdmin || Boolean(member?.can_manage_workers), status: business.status };
+}
+
+function gastosVisibles(gastos: postgres.Row[]) {
+  return gastos.map(({ id, concepto, fecha, beneficiario, importe, estado }) =>
+    ({ id, concepto, fecha, beneficiario, importe, estado }));
 }
 
 function conflict(error: unknown): never {
@@ -224,8 +233,8 @@ class CampoController {
       const canManageTrips = role !== 'encargado';
       const trips = await sql`select t.id,t.reference,t.customer, case when ${canManageTrips} then t.apertura end apertura,
         (t.acuerdos is not null) as can_open,
-        coalesce(t.apertura ? 'canastos', false) as vehicle_assigned,
-        t.cerrado_en is null as can_assign_vehicle,
+        coalesce(t.apertura ? 'canastos', false) as vehicle_assigned, t.reasignado_en, t.cerrado_en,
+        (t.cerrado_en is null and t.reasignado_en is null) as can_assign_vehicle,
         coalesce((
           select jsonb_object_agg(key,value) from jsonb_each(coalesce(t.apertura,t.acuerdos))
           where key in ('chofer','placas','vehiculo','canastos','tara')
@@ -239,11 +248,11 @@ class CampoController {
         )) order by t.created_at desc`;
       const members = canManageTrips ? await sql`select m.user_id,u.email,m.role,m.can_manage_workers from campo.members m
         join auth.users u on u.id=m.user_id where m.business_id=${businessId}
-          and (m.role='encargado' or ${role === 'superadministrador'}) order by u.email` : [];
+          and m.role='encargado' order by u.email` : [];
       const history = canManageTrips ? await sql`select a.id,a.action,a.details,a.created_at,u.email
         from campo.audit a join auth.users u on u.id=a.actor_id
         where a.business_id=${businessId} order by a.id desc limit 50` : [];
-      const requests = await sql`select r.id,r.datos,r.status,r.reason,r.trip_id,u.email,
+      const requests = await sql`select r.id,r.datos,r.status,r.reason,r.trip_id,r.version,r.source_trip_id,u.email,
           (select json_agg(json_build_object('id',a.id,'action',a.action,'created_at',a.created_at,
             'email',actor.email,'reason',a.details->>'reason') order by a.id)
             from campo.audit a join auth.users actor on actor.id=a.actor_id
@@ -255,6 +264,35 @@ class CampoController {
         order by r.created_at desc`;
       return { role, canManageTrips, canManageWorkers, trips, members, history, requests };
     });
+  }
+
+  @Get('businesses/:id/members')
+  @ApiBearerAuth()
+  async listMembers(@Headers('authorization') header: string, @Param('id') id: string, @ParamQuery('page') page?: string) {
+    const user = await actor(header);
+    const businessId = parse(uuid, id);
+    const requested = parse(z.coerce.number().int().min(1).max(100_000_000), page ?? '1');
+    return db.begin(async sql => {
+      const { role, canManageWorkers } = await access(sql, businessId, user.id, true);
+      const [count] = await sql`select count(*)::int total from campo.members where business_id=${businessId}`;
+      const actualPage = Math.min(requested, Math.max(1, Math.ceil(count.total / 20)));
+      const superAdmin = role === 'superadministrador';
+      const members = await sql`select m.user_id,u.email,m.role,m.can_manage_workers,
+        (${superAdmin} and m.role='administrador') as can_edit,
+        (${superAdmin} or (${canManageWorkers} and m.role='encargado')) as can_remove
+        from campo.members m join auth.users u on u.id=m.user_id where m.business_id=${businessId}
+        order by lower(u.email),m.user_id limit 20 offset ${(actualPage - 1) * 20}`;
+      return { members, total: count.total, page: actualPage, superAdmin, canAdd: canManageWorkers };
+    });
+  }
+
+  @Post('businesses/:id/members/bulk-removal')
+  @ApiBearerAuth()
+  @input(bulkRemoval)
+  async bulkRemove(@Headers('authorization') header: string, @Param('id') id: string, @Body() body: unknown) {
+    const user = await actor(header);
+    const { userIds, reason } = parse(bulkRemoval, body);
+    return this.removeMembers(parse(uuid, id), user.id, userIds, reason);
   }
 
   @Post('businesses/:id/members')
@@ -304,17 +342,27 @@ class CampoController {
     const businessId = parse(uuid, id);
     const target = parse(uuid, memberId);
     const { reason } = parse(removalInput, body);
+    return this.removeMembers(businessId, user.id, [target], reason);
+  }
+
+  private async removeMembers(businessId: string, actorId: string, userIds: string[], reason: string) {
     return db.begin(async sql => {
-      await access(sql, businessId, user.id, 'exclusive');
-      const [member] = await sql`select role from campo.members where business_id=${businessId} and user_id=${target}`;
-      if (!member) throw new NotFoundException('Integrante no encontrado.');
-      await this.memberAccess(sql, businessId, user.id, member.role);
+      const { role, canManageWorkers, status } = await access(sql, businessId, actorId, 'exclusive');
+      const members = await sql`select user_id,role from campo.members
+        where business_id=${businessId} and user_id=any(${userIds}::uuid[])`;
+      if (members.length !== userIds.length) throw new NotFoundException('Algún empleado ya no pertenece al negocio.');
+      if (role !== 'superadministrador' &&
+        (status !== 'aprobado' || !canManageWorkers || members.some(member => member.role !== 'encargado'))) {
+        throw new ForbiddenException('No tienes permiso para dar de baja a todos los empleados seleccionados.');
+      }
       const assignments = await sql`delete from campo.assignments where business_id=${businessId}
-        and user_id=${target} returning trip_id`;
-      await sql`delete from campo.members where business_id=${businessId} and user_id=${target}`;
-      await audit(sql, businessId, user.id, 'baja_' + member.role, {
-        userId: target, reason, tripIds: assignments.map(item => item.trip_id),
-      });
+        and user_id=any(${userIds}::uuid[]) returning user_id,trip_id`;
+      await sql`delete from campo.members where business_id=${businessId} and user_id=any(${userIds}::uuid[])`;
+      for (const member of members) {
+        await audit(sql, businessId, actorId, 'baja_' + member.role, {
+          userId: member.user_id, reason, tripIds: assignments.filter(item => item.user_id === member.user_id).map(item => item.trip_id),
+        });
+      }
       return { ok: true };
     });
   }
@@ -359,7 +407,7 @@ class CampoController {
       const [updated] = await sql`update campo.trips set apertura=${sql.json(datos)},
         acuerdos=${sql.json(acuerdosDeApertura(datos))}
         where business_id=${businessId} and id=${tripId} and reference=${datos.reference}
-          and customer=${datos.customer} and acuerdos is null and cerrado_en is null returning id`;
+          and customer=${datos.customer} and acuerdos is null and cerrado_en is null and reasignado_en is null returning id`;
       if (!updated) throw new ConflictException('El viaje no está disponible para completar la apertura.');
       await audit(sql, businessId, user.id, 'apertura_viaje', { tripId });
       return updated;
@@ -378,7 +426,7 @@ class CampoController {
     return db.begin(async sql => {
       const { role } = await access(sql, businessId, user.id, false, true);
       const actual = await this.verifyTrip(sql, businessId, tripId, user.id, role);
-      if (actual.cerrado_en || vehiculo.safeParse(actual.apertura).success) {
+      if (actual.cerrado_en || actual.reasignado_en || vehiculo.safeParse(actual.apertura).success) {
         throw new ConflictException('El viaje está cerrado o ya tiene un vehículo asignado.');
       }
       await verificarPlacas(sql, businessId, datos.placas, tripId);
@@ -419,9 +467,9 @@ class CampoController {
       const { role } = await access(sql, businessId, user.id);
       if (role !== 'encargado') throw new ForbiddenException('Solo el encargado puede reenviar su solicitud.');
       await verificarPlacas(sql, businessId, datos.placas);
-      const [updated] = await sql`update campo.trip_requests set datos=${sql.json(datos)},status='pendiente',reason=null
+      const [updated] = await sql`update campo.trip_requests set datos=${sql.json(datos)},status='pendiente',reason=null,version=version+1
         where id=${requestId} and business_id=${businessId} and requester_id=${user.id}
-          and status='devuelta' returning id,status`;
+          and status in ('devuelta','pendiente_correccion') returning id,status`;
       if (!updated) throw new ConflictException('La solicitud no está disponible para correcciones.');
       await audit(sql, businessId, user.id, 'reenvio_solicitud_viaje', { requestId, datos });
       return updated;
@@ -442,22 +490,80 @@ class CampoController {
       const [current] = await sql`select * from campo.trip_requests
         where business_id=${businessId} and id=${requestId} for update`;
       if (!current) throw new NotFoundException('Solicitud no encontrada.');
+      if (current.version !== review.version) throw new ConflictException('La solicitud cambió. Recarga la versión vigente.');
       if (current.status !== 'pendiente') throw new ConflictException('La solicitud ya fue revisada.');
-      if (review.action === 'devolver') {
-        await sql`update campo.trip_requests set status='devuelta',reason=${review.reason} where id=${requestId}`;
-        await audit(sql, businessId, user.id, 'devolucion_solicitud_viaje', { requestId, reason: review.reason });
-        return { status: 'devuelta' };
+      const datos = review.action === 'cancelar' ? current.datos : review.datos ?? current.datos;
+      if (review.action !== 'aprobar') {
+        const status = review.action === 'devolver' ? 'devuelta' : 'cancelada';
+        await sql`update campo.trip_requests set status=${status},reason=${review.reason},
+          datos=${sql.json(datos)},version=version+1 where id=${requestId}`;
+        await audit(sql, businessId, user.id, review.action === 'devolver' ? 'devolucion_solicitud_viaje' : 'cancelacion_solicitud_viaje', {
+          requestId, reason: review.reason, previo: current.datos, datos,
+        });
+        return { status };
       }
       const [worker] = await sql`select user_id from campo.members where business_id=${businessId}
         and user_id=${current.requester_id} and role='encargado'`;
       if (!worker) throw new ConflictException('La cuenta solicitante ya no está activa como encargado.');
-      const trip = await crearViaje(sql, businessId, parse(apertura, current.datos));
+      const trip = await crearViaje(sql, businessId, parse(apertura, datos));
       await sql`insert into campo.assignments (business_id,trip_id,user_id)
         values (${businessId},${trip.id},${worker.user_id})`;
-      await sql`update campo.trip_requests set status='aprobada',trip_id=${trip.id} where id=${requestId}`;
-      await audit(sql, businessId, user.id, 'aprobacion_solicitud_viaje', { requestId, tripId: trip.id });
+      await sql`update campo.trip_requests set status='aprobada',trip_id=${trip.id},datos=${sql.json(datos)},version=version+1 where id=${requestId}`;
+      await audit(sql, businessId, user.id, 'aprobacion_solicitud_viaje', { requestId, tripId: trip.id, previo: current.datos, datos });
       return { status: 'aprobada', tripId: trip.id };
     }).catch(conflict);
+  }
+
+  @Post('businesses/:id/trips/:tripId/reassignment')
+  @ApiBearerAuth()
+  @input(reassignmentInput)
+  async reassign(@Headers('authorization') header: string, @Param('id') id: string,
+    @Param('tripId') trip: string, @Body() body: unknown) {
+    const user = await actor(header);
+    const negocio = parse(uuid, id);
+    const viaje = parse(uuid, trip);
+    const { userId, reason } = parse(reassignmentInput, body);
+    return db.begin(async sql => {
+      await access(sql, negocio, user.id, true, true);
+      const [original] = await sql`select apertura,acuerdos,reference,customer,cerrado_en from campo.trips
+        where business_id=${negocio} and id=${viaje} for update`;
+      if (!original) throw new NotFoundException('Viaje no encontrado.');
+      const [existente] = await sql`select id,status from campo.trip_requests where source_trip_id=${viaje}`;
+      if (existente) return existente;
+      if (original.cerrado_en) throw new ConflictException('El viaje ya está cerrado.');
+      const [worker] = await sql`select user_id from campo.members where business_id=${negocio}
+        and user_id=${userId} and role='encargado'`;
+      if (!worker) throw new NotFoundException('Selecciona un encargado activo del negocio.');
+      const { accion, ...acuerdos } = original.acuerdos ?? {};
+      const datos = { ...acuerdos, ...original.apertura, customer: original.customer, reference: '' };
+      const [request] = await sql`insert into campo.trip_requests (business_id,requester_id,datos,status,reason,source_trip_id)
+        values (${negocio},${userId},${sql.json(datos)},'pendiente_correccion',${reason},${viaje}) returning id,status`;
+      await sql`update campo.trips set reasignado_en=now() where id=${viaje}`;
+      await audit(sql, negocio, user.id, 'reasignacion_viaje', { requestId: request.id, tripId: viaje, userId, reason });
+      return request;
+    }).catch(conflict);
+  }
+
+  @Get('businesses/:id/trip-requests/:requestId/source')
+  @ApiBearerAuth()
+  async requestSource(@Headers('authorization') header: string, @Param('id') id: string, @Param('requestId') request: string) {
+    const user = await actor(header);
+    const negocio = parse(uuid, id);
+    const requestId = parse(uuid, request);
+    return db.begin(async sql => {
+      const { role } = await access(sql, negocio, user.id);
+      const [source] = await sql`select t.id,t.reference from campo.trip_requests r
+        join campo.trips t on t.business_id=r.business_id and t.id=r.source_trip_id
+        where r.id=${requestId} and r.business_id=${negocio} and (${role !== 'encargado'} or r.requester_id=${user.id})`;
+      if (!source) throw new NotFoundException('El viaje de origen no está disponible.');
+      const data = await expediente(sql, source.id);
+      return { reference: source.reference,
+        compras: data.compras.map(({ folio, finca, kg }) => ({ folio, finca, kg })),
+        ticket: data.ticketFabrica, entrega: data.entrega,
+        gastos: role === 'encargado' ? gastosVisibles(data.gastos) : data.gastos,
+        ...(role !== 'encargado' && { abonos: data.abonos }),
+      };
+    });
   }
 
   @Get('businesses/:id/trips/:tripId/operation')
@@ -477,7 +583,8 @@ class CampoController {
       const beneficiario = role === 'encargado' ? user.email ?? '' : asignado?.email ?? '';
       return role === 'encargado' ? {
         beneficiario,
-        resumen: { acuerdos: Boolean(result.resumen.acuerdos), cerrado_en: result.resumen.cerrado_en },
+        gastos: gastosVisibles(result.gastos),
+        resumen: { acuerdos: Boolean(result.resumen.acuerdos), cerrado_en: result.resumen.cerrado_en, reasignado_en: result.resumen.reasignado_en },
         compras: result.compras.map(({ id, folio, finca, kg }) => ({ id, folio, finca, kg })),
       } : { ...result, beneficiario };
     });
@@ -497,15 +604,16 @@ class CampoController {
       const actual = await this.verifyTrip(sql, negocio, viaje, user.id, role);
       if (!actual.acuerdos) throw new ConflictException('Completa los datos de apertura del viaje.');
       const cambios = await registrarOperacion(sql, viaje, negocio, datos, role);
+      if (cambios && 'existente' in cambios) return { ok: true, ...cambios };
       await audit(sql, negocio, user.id, datos.accion, {
         tripId: viaje, reason: ('motivo' in datos ? datos.motivo : undefined) ?? '', cambios,
       });
-      return { ok: true };
+      return { ok: true, ...cambios };
     }).catch(conflict);
   }
 
   private async verifyTrip(sql: Query, negocio: string, viaje: string, userId: string, role: string) {
-    const [row] = await sql`select t.apertura,t.acuerdos,t.cerrado_en from campo.trips t where t.business_id=${negocio} and t.id=${viaje}
+    const [row] = await sql`select t.apertura,t.acuerdos,t.cerrado_en,t.reasignado_en from campo.trips t where t.business_id=${negocio} and t.id=${viaje}
       and (${role !== 'encargado'} or exists(select 1 from campo.assignments a
       where a.trip_id=t.id and a.user_id=${userId}))`;
     if (!row) throw new NotFoundException('Viaje no encontrado.');
@@ -525,7 +633,7 @@ class CampoController {
       const [created] = await sql`insert into campo.assignments (business_id,trip_id,user_id)
         select t.business_id,t.id,m.user_id from campo.trips t
         join campo.members m on m.business_id=t.business_id and m.user_id=${userId} and m.role='encargado'
-        where t.business_id=${businessId} and t.id=${tripId} returning user_id`;
+        where t.business_id=${businessId} and t.id=${tripId} and t.reasignado_en is null returning user_id`;
       if (!created) throw new NotFoundException('El viaje y el encargado deben pertenecer al negocio.');
       await audit(sql, businessId, user.id, 'asignacion_viaje', { tripId,userId });
       return { ok: true };

@@ -25,7 +25,7 @@ export function DatosDelViaje({ datos }: { datos: DatosApertura }) {
   </div>)}</dl>;
 }
 
-export function Apertura({ titulo, inicial, busy, enviar, volver, folioFijo, soloVehiculo, vehiculoFijo }: {
+export function Apertura({ titulo, inicial, busy, enviar, volver, folioFijo, soloVehiculo, vehiculoFijo, motivo }: {
   titulo: string;
   inicial?: DatosApertura;
   busy: boolean;
@@ -34,10 +34,12 @@ export function Apertura({ titulo, inicial, busy, enviar, volver, folioFijo, sol
   folioFijo?: boolean;
   soloVehiculo?: boolean;
   vehiculoFijo?: boolean;
+  motivo?: boolean;
 }) {
   const [paso, setPaso] = useState(0);
   const [datos, setDatos] = useState<DatosApertura>(inicial ?? {});
   const [dirty, setDirty] = useState(false);
+  const [razon, setRazon] = useState('');
   return <form className="captura" data-dirty={dirty} onSubmit={event => {
     event.preventDefault();
     if (paso === 0 && !soloVehiculo) setPaso(1);
@@ -62,6 +64,8 @@ export function Apertura({ titulo, inicial, busy, enviar, volver, folioFijo, sol
           onChange={event => actualizar(event.target.value)} />}
       </label>;
     })}
+    {paso === 1 && motivo && <label>Motivo de devolución<input name="reason" minLength={3} maxLength={300}
+      required value={razon} onChange={event => { setRazon(event.target.value); setDirty(true); }} /></label>}
     <div className="acciones">
       <Volver disabled={busy} onClick={() => paso ? setPaso(0) : confirmarSalida() && volver()} />
       <button disabled={busy}>{paso === 0 && !soloVehiculo ? 'Continuar' : titulo}</button>

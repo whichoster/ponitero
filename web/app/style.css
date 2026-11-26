@@ -35,3 +35,11 @@ article { padding: .75rem 0; border-top: 1px solid #c6d7cb; }
 .encabezado-negocio h2 { flex: 1; margin: 0; overflow-wrap: anywhere; }
 .captura > fieldset { grid-column: 1 / -1; min-width: 0; margin: 0; border: 1px solid #c6d7cb; border-radius: .4rem; }
 .captura > fieldset > .captura { margin-top: .25rem; }
+.empleados { margin-top: 1rem; }
+.tabla-desplazable { overflow-x: auto; margin-block: 1rem; }
+.empleados table { border-collapse: collapse; width: 100%; }
+.empleados td, .empleados th { padding: .65rem; border-bottom: 1px solid #c6d7cb; text-align: left; }
+.paginacion { align-items: center; }
+.empleados dialog { width: min(90vw, 32rem); max-height: 85vh; border: 1px solid #c6d7cb; border-radius: .75rem; padding: 1rem; color: inherit; }
+.empleados dialog::backdrop { background: #19382b66; }
+.captura .ancho-completo { grid-column: 1 / -1; margin: 0; }

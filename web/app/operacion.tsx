@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 
 import { Volver } from './volver';
-import { confirmarSalida } from './apertura';
+import { confirmarSalida, DatosDelViaje, type DatosApertura } from './apertura';
 
 type Fila = Record<string, string | null>;
 type Expediente = {
@@ -25,12 +25,23 @@ const fecha: Campo = ['fecha', 'Fecha', 'fecha'];
 const motivo: Campo = ['motivo', 'Motivo'];
 const conceptosTicket = ['corte','estiba','flete local','vaciado','pasaje'];
 const importe: Campo = ['importe', 'Importe en MXN', 'decimal'];
-const gastosFijos = ['Corte', 'Estiba', 'Canastos', 'Escalera'];
+const gastosFijos = ['Corte', 'Estiba'];
 const gastosOpcionales = [
+  ['canastos', 'Canastos'], ['escalera', 'Escalera'],
   ['flete local', 'Flete'], ['pasaje', 'Pasaje'], ['mandados', 'Mandados'],
   ['combustible propio', 'Combustible propio'], ['agua', 'Agua'], ['lonches', 'Lunch'], ['otro', 'Otros'],
 ];
 const pesos = new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' });
+
+type GastoAdicional = { id: number; concepto: string; cantidad: string; tarifaUnitaria: string };
+
+function subtotalAdicional({ cantidad, tarifaUnitaria }: GastoAdicional) {
+  if (!/^[1-9][0-9]{0,8}$/.test(cantidad) || !/^[0-9]{1,9}(\.[0-9]{1,2})?$/.test(tarifaUnitaria)) return '—';
+  const [pesosEnteros, decimales = ''] = tarifaUnitaria.split('.');
+  const centavos = Number(pesosEnteros + decimales.padEnd(2, '0'));
+  const total = centavos * Number(cantidad);
+  return total > 0 && total < 100000000000000 ? pesos.format(total / 100) : '—';
+}
 
 const variedades = ['Cayena', 'MD2', 'Champaca', 'Otra'];
 const camposTicket: Campo[] = [
@@ -41,33 +52,43 @@ const camposCompraNueva: Campo[] = [
   ['productor','Productor'], ...camposTicket, ['tarifa','Compra por tonelada','decimal'], ['reserva','Reserva pactada (MXN)','decimal'],
 ];
 
+function detalleGastoUnitario(gasto: Fila) {
+  if (gasto.cantidad == null || gasto.tarifa_unitaria == null) return '';
+  return ' · ' + gasto.cantidad + ' × ' + pesos.format(Number(gasto.tarifa_unitaria));
+}
+
 function valoresTicket(ticket: Fila) {
   const variedad = ticket.variedad ?? '';
   return variedades.includes(variedad) ? ticket : { ...ticket, variedad: 'Otra', descripcion: variedad };
 }
 
-function Formulario({ titulo, accion, campos, enviar, inicial, tickets, beneficiario, valoresIniciales, children, alCambiar, etiquetaGuardar = 'Guardar' }: {
+function Formulario({ titulo, accion, campos, enviar, inicial, tickets, beneficiario, valoresIniciales, children, alCambiar, canastosViaje, etiquetaGuardar = 'Guardar' }: {
   titulo: string; accion: string; campos: Campo[];
-  enviar: (datos: object) => Promise<boolean>; inicial?: object; tickets?: Fila[]; beneficiario?: string; valoresIniciales?: Fila; children?: ReactNode; alCambiar?: (campo: HTMLSelectElement) => void; etiquetaGuardar?: string;
+  enviar: (datos: object) => Promise<boolean>; inicial?: object; tickets?: Fila[]; beneficiario?: string; valoresIniciales?: Fila; children?: ReactNode; alCambiar?: (campo: HTMLSelectElement) => void; canastosViaje?: string; etiquetaGuardar?: string;
 }) {
   const [guardando, setGuardando] = useState(false);
-  const [conceptoOpcional, setConceptoOpcional] = useState('');
+  const [adicionales, setAdicionales] = useState<GastoAdicional[]>([]);
+  const siguienteAdicional = useRef(0);
+
+  function actualizarAdicional(id: number, cambios: Partial<GastoAdicional>) {
+    setAdicionales(previos => previos.map(partida => partida.id === id ? { ...partida, ...cambios } : partida));
+  }
+
   async function guardar(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
     const valores = Object.fromEntries([...new FormData(form)].filter(([, value]) => value !== ''));
-    const partidas = gastosFijos.flatMap(etiqueta => {
+    const partidasFijas = gastosFijos.flatMap(etiqueta => {
       const concepto = etiqueta.toLowerCase();
       return valores[concepto] ? [{ concepto, importe: valores[concepto] }] : [];
     });
-    if (conceptoOpcional && valores.importeOpcional) {
-      partidas.push({ concepto: conceptoOpcional, importe: valores.importeOpcional });
-    }
+    const partidas = [...partidasFijas, ...adicionales.map(({ concepto, cantidad, tarifaUnitaria }) =>
+      ({ concepto, cantidad, tarifaUnitaria }))];
     setGuardando(true);
     try {
       if (await enviar({ accion, ...inicial, ...valores, ...(accion === 'gastos' && { partidas }) })) {
         form.reset();
-        setConceptoOpcional('');
+        setAdicionales([]);
         delete form.dataset.dirty;
       }
     } finally {
@@ -94,13 +115,35 @@ function Formulario({ titulo, accion, campos, enviar, inicial, tickets, benefici
           {gastosFijos.map(etiqueta => <label key={etiqueta}>{etiqueta}
             <input name={etiqueta.toLowerCase()} inputMode="decimal" pattern="[0-9]{1,9}([.][0-9]{1,2})?" />
           </label>)}
-          <label>Concepto opcional<select value={conceptoOpcional} onChange={event => setConceptoOpcional(event.target.value)}>
-            <option value="">Selecciona un concepto</option>
-            {gastosOpcionales.map(([valor, etiqueta]) => <option key={valor} value={valor}>{etiqueta}</option>)}
-          </select></label>
-          {conceptoOpcional && <label>Importe del concepto opcional
-            <input key={conceptoOpcional} name="importeOpcional" required inputMode="decimal" pattern="[0-9]{1,9}([.][0-9]{1,2})?" />
-          </label>}
+          <fieldset className="conceptos-adicionales">
+            <legend>Conceptos adicionales</legend>
+            {adicionales.map(partida => <div className="captura partida-adicional" key={partida.id}>
+              <label>Concepto<select required value={partida.concepto} onChange={event => {
+                const concepto = event.target.value;
+                actualizarAdicional(partida.id, { concepto, cantidad: concepto === 'canastos' ? canastosViaje ?? '' : '' });
+              }}>
+                <option value="">Selecciona un concepto</option>
+                {gastosOpcionales.map(([valor, etiqueta]) => <option key={valor} value={valor}
+                  disabled={adicionales.some(otra => otra.id !== partida.id && otra.concepto === valor)}>{etiqueta}</option>)}
+              </select></label>
+              <label>Cantidad<input required value={partida.cantidad} inputMode="numeric"
+                pattern="[1-9][0-9]{0,8}" onChange={event => actualizarAdicional(partida.id, { cantidad: event.target.value })} /></label>
+              <label>Tarifa por unidad (MXN)<input required value={partida.tarifaUnitaria} inputMode="decimal"
+                pattern="[0-9]{1,9}([.][0-9]{1,2})?"
+                onChange={event => actualizarAdicional(partida.id, { tarifaUnitaria: event.target.value })} /></label>
+              <p>Subtotal <output>{subtotalAdicional(partida)}</output></p>
+              <button type="button" className="secondary" disabled={guardando} onClick={event => {
+                if (event.currentTarget.form) event.currentTarget.form.dataset.dirty = 'true';
+                setAdicionales(previos => previos.filter(otra => otra.id !== partida.id));
+              }}>Quitar {gastosOpcionales.find(([valor]) => valor === partida.concepto)?.[1] ?? 'concepto'}</button>
+            </div>)}
+            <button type="button" className="secondary" disabled={guardando || adicionales.length >= gastosOpcionales.length}
+              onClick={event => {
+                if (event.currentTarget.form) event.currentTarget.form.dataset.dirty = 'true';
+                const id = siguienteAdicional.current++;
+                setAdicionales(previos => [...previos, { id, concepto: '', cantidad: '', tarifaUnitaria: '' }]);
+              }}>Agregar concepto</button>
+          </fieldset>
         </div>
       </fieldset>}
       {tickets && <label>Ticket de finca<select name="ticket" defaultValue={valoresIniciales?.ticket ?? undefined} onChange={event => alCambiar?.(event.currentTarget)} required>
@@ -114,7 +157,7 @@ function Formulario({ titulo, accion, campos, enviar, inicial, tickets, benefici
           const form = event.currentTarget.form;
           if (!form || (form.dataset.dirty === 'true' && !confirmarSalida())) return;
           form.reset();
-          setConceptoOpcional('');
+          setAdicionales([]);
           delete form.dataset.dirty;
           form.closest('details')?.removeAttribute('open');
         }} />
@@ -206,7 +249,17 @@ function PlanCompra({ resumen, plan, registrar, guardar }: {
   </details>;
 }
 
-export function Operacion({ cargar, registrar, administra, encargados, asignado, reasignar }: {
+const seccionesViaje = [
+  ['resumen', 'Resumen'], ['compras', 'Compras'], ['gastos', 'Gastos y chofer'],
+  ['entrega', 'Entrega y cierre'], ['cobranza', 'Cobranza'],
+] as const;
+type SeccionViaje = (typeof seccionesViaje)[number][0];
+
+export function Operacion({ cargar, registrar, administra, encargados, asignado, reasignar,
+  aperturaViaje, vehiculo, abrirCobranza }: {
+  aperturaViaje: DatosApertura | null;
+  vehiculo: DatosApertura;
+  abrirCobranza: () => void;
   cargar: () => Promise<Expediente>;
   registrar: (datos: object) => Promise<unknown>;
   administra: boolean;
@@ -214,6 +267,7 @@ export function Operacion({ cargar, registrar, administra, encargados, asignado,
   asignado: string;
   reasignar: (datos: object) => Promise<void>;
 }) {
+  const [seccion, setSeccion] = useState<SeccionViaje>('resumen');
   const [datos, setDatos] = useState<Expediente>();
   const [mensaje, setMensaje] = useState('');
   const [reasignando, setReasignando] = useState(false);
@@ -277,169 +331,217 @@ export function Operacion({ cargar, registrar, administra, encargados, asignado,
     </Formulario>;
   }
 
+  let siguiente: { seccion: SeccionViaje; etiqueta: string } | undefined;
+  if (administra && resumen?.acuerdos && !cerrado && !reasignado) {
+    if (!resumen.kg_ticket || resumen.kg_correo == null || Number(resumen.kg_ticket) !== Number(resumen.kg_correo)) {
+      siguiente = { seccion: 'entrega', etiqueta: 'Revisar entrega y recepción' };
+    } else if (Number(resumen.gastos_pendientes) > 0 || datos?.gastos?.some(gasto => gasto.requiere_revision_ticket)) {
+      siguiente = { seccion: 'gastos', etiqueta: 'Revisar gastos' };
+    } else siguiente = { seccion: 'entrega', etiqueta: 'Ir al cierre' };
+  }
+  if (administra && cerrado && (Number(resumen?.saldo_producto ?? resumen?.venta_confirmada) > 0 ||
+    Number(resumen?.saldo_flete ?? resumen?.flete_cliente) > 0)) {
+    siguiente = { seccion: 'cobranza', etiqueta: 'Consultar saldos pendientes' };
+  }
+
   return <section className="operacion">
     {mensaje && <p role="status">{mensaje}</p>}
     {!datos && !mensaje && <p>Cargando expediente…</p>}
     {datos && resumen && <>
       <h4>{reasignado ? 'Viaje reasignado' : cerrado ? 'Operación cerrada' : 'Operación abierta'}</h4>
-      {administra && resumen.acuerdos && <>
-        <dl className="indicadores">
-          {([
-            ['Costo operativo', resumen.costo],
-            ['Resultado de producto', resumen.resultado_producto],
-            ['Resultado con flete', resumen.resultado_total],
-            ['Saldo del chofer', resumen.saldo_chofer],
-            ['Flete acordado con cliente', resumen.flete_cliente],
-          ] as const).map(([etiqueta, valor]) => <div key={etiqueta}>
-            <dt>{etiqueta}</dt><dd>{valor == null ? 'Pendiente' : pesos.format(Number(valor))}</dd>
-          </div>)}
-        </dl>
-        {resumen.kg_ticket && <p>Merma real {resumen.merma_kg} kg ({resumen.merma_pct ?? '—'} %).
-          {Number(resumen.merma_kg) < 0 && ' Revisa el peso recibido.'}
-          {resumen.kg_correo == null && ' Falta el correo de recepción.'}
-          {resumen.kg_correo != null && Number(resumen.kg_ticket) !== Number(resumen.kg_correo) && ' El peso del correo difiere del ticket.'}</p>}
-        <p>Margen de producto {resumen.margen_producto ?? '—'} % · Margen con flete {resumen.margen_total ?? '—'} %</p>
-        {!!datos.planes?.length && <details><summary>Historial de estimaciones</summary><ul>
-          {datos.planes.map(escenario => <li key={escenario.id}>
-            {escenario.kg} kg · {escenario.merma} % de merma · Reserva {pesos.format(Number(escenario.reserva))}
-            {escenario.escenario && <> · <ResultadoCompra resultado={escenario.escenario.resultado} /></>}
-          </li>)}
-        </ul></details>}
-        {datos.entrega && typeof resumen.acuerdos === 'object' && resumen.acuerdos && <details>
-          <summary>Remisión de entrega · {datos.entrega.folio}</summary>
-          <p>{datos.entrega.fecha} · {resumen.acuerdos.producto} · {datos.entrega.kg} kg</p>
-          <p>Precio pactado por tonelada {pesos.format(Number(resumen.acuerdos.venta))}</p>
-        </details>}
-      </>}
-      {resumen.acuerdos && <section>
-        <h4>Comprar a productores</h4>
-        <p>Folio {resumen.folio_compra} · {resumen.kg_comprados} kg comprados
-          {resumen.kg_pendientes != null && <> · {resumen.kg_pendientes} kg pendientes</>}
-        </p>
-        {administra && !cerrado && !reasignado && <Formulario titulo="Agregar ticket de finca"
-          accion="compra" enviar={enviar} campos={camposCompraNueva}>
-          <p>Folio de compra {resumen.folio_compra}</p>
-        </Formulario>}
-        {datos.remisiones?.map(remision => {
-          const tickets = datos.compras.filter(ticket => ticket.productor === remision.productor);
-          const fincas = [...new Set(tickets.flatMap(ticket => ticket.finca ? [ticket.finca] : []))];
-          return <details key={remision.productor}>
-            <summary>{remision.folio} · {remision.productor}</summary>
-            <p>Total {remision.kg} kg · {pesos.format(Number(remision.importe))} · Reserva pactada {pesos.format(Number(remision.reserva))}</p>
-            <p>Reserva sugerida {pesos.format(Number(remision.reserva_sugerida))}</p>
-            {!cerrado && !reasignado && <Formulario titulo="Agregar ticket" accion="compra" enviar={enviar}
-              inicial={{ productor: remision.productor }}
-              campos={camposCompraNueva.filter(campo => campo[0] !== 'productor' && campo[0] !== 'finca')}
-            >
-              <p>{remision.productor} · {remision.folio}</p>
-              <label>Finca<input name="finca" required maxLength={200} list={remision.folio ?? undefined}
-                defaultValue={fincas.length === 1 ? fincas[0] : undefined} /></label>
-              <datalist id={remision.folio ?? undefined}>{fincas.map(finca => <option key={finca} value={finca} />)}</datalist>
-            </Formulario>}
-            {tickets.map(ticket => <details key={ticket.id}>
-              <summary>{ticket.folio} · {ticket.finca} · {ticket.kg} kg</summary>
-              <p>{ticket.variedad} · {pesos.format(Number(ticket.tarifa))}/t · Importe {pesos.format(Number(ticket.importe))}
-                {' · '}Reserva {pesos.format(Number(ticket.reserva))}</p>
-              {!cerrado && !reasignado && <Formulario key={ticket.version} titulo="Corregir ticket"
-                accion="corregirCompra" enviar={enviar} inicial={{ ticket: ticket.id, version: ticket.version }}
-                valoresIniciales={valoresTicket(ticket)} campos={[...camposTicket, motivo]} />}
-              {capturaGastoTicket(ticket)}
-            </details>)}
-          </details>;
-        })}
-        {!administra && datos.compras.map(ticket => <details key={ticket.id}>
-          <summary>{ticket.folio} · {ticket.finca} · {ticket.kg} kg</summary>
-          {capturaGastoTicket(ticket)}
-        </details>)}
-      </section>}
-      {administra && resumen.acuerdos && !cerrado && !reasignado && <>
-        <PlanCompra key={datos.planes?.at(-1)?.id ?? 'inicial'} resumen={resumen} plan={datos.planes?.at(-1)}
-          registrar={registrar} guardar={enviar} />
-        <Formulario key={datos.ticketFabrica ? 'corregir-ticket' : 'registrar-ticket'}
-          titulo={datos.ticketFabrica ? 'Corregir ticket de fábrica' : 'Registrar ticket de fábrica'}
-          accion="ticketFabrica" enviar={enviar} valoresIniciales={datos.ticketFabrica} campos={[fecha,
-            ['folio','Folio del ticket'], ['kg','Peso neto (kg)','decimal'], ...(datos.ticketFabrica ? [motivo] : [])]} />
-        {!datos.entrega && datos.ticketFabrica?.folio?.trim() && datos.ticketFabrica.fecha && Number(datos.ticketFabrica.kg) > 0 &&
-          typeof resumen.acuerdos === 'object' && <Formulario titulo="Emitir remisión de entrega" accion="entrega" enviar={enviar}
-            etiquetaGuardar="Emitir remisión" campos={[fecha]} valoresIniciales={datos.ticketFabrica}>
-            <p className="ancho-completo">{resumen.customer} · {resumen.acuerdos.producto} · {datos.ticketFabrica.kg} kg · {
-              pesos.format(Number(resumen.acuerdos.venta))}/t. El folio se asigna al emitir.</p>
+      <nav className="acciones" aria-label="Secciones del viaje">
+        {seccionesViaje.filter(([id]) => administra || (id !== 'entrega' && id !== 'cobranza')).map(([id, etiqueta]) =>
+          <button type="button" key={id} aria-pressed={seccion === id}
+            className={seccion === id ? undefined : 'secondary'} onClick={() => setSeccion(id)}>{etiqueta}</button>)}
+      </nav>
+      <section className="seccion-viaje" hidden={seccion !== 'resumen'}>
+        <h4>Resumen</h4>
+          <DatosDelViaje datos={aperturaViaje ?? vehiculo} />
+          {siguiente && <p><button type="button" onClick={() => setSeccion(siguiente.seccion)}>{siguiente.etiqueta}</button></p>}
+        {administra && resumen.acuerdos && <>
+          <dl className="indicadores">
+            {([
+              ['Costo operativo', resumen.costo],
+              ['Resultado de producto', resumen.resultado_producto],
+              ['Resultado con flete', resumen.resultado_total],
+            ] as const).map(([etiqueta, valor]) => <div key={etiqueta}>
+              <dt>{etiqueta}</dt><dd>{valor == null ? 'Pendiente' : pesos.format(Number(valor))}</dd>
+            </div>)}
+          </dl>
+          {resumen.kg_ticket && <p>Merma real {resumen.merma_kg} kg ({resumen.merma_pct ?? '—'} %).
+            {Number(resumen.merma_kg) < 0 && ' Revisa el peso recibido.'}
+            {resumen.kg_correo == null && ' Falta el correo de recepción.'}
+            {resumen.kg_correo != null && Number(resumen.kg_ticket) !== Number(resumen.kg_correo) && ' El peso del correo difiere del ticket.'}</p>}
+          <p>Margen de producto {resumen.margen_producto ?? '—'} % · Margen con flete {resumen.margen_total ?? '—'} %</p>
+        </>}
+      </section>
+      <section className="seccion-viaje" hidden={seccion !== 'compras'}>
+        <h4>Compras</h4>
+        {administra && !!datos.planes?.length && <details><summary>Historial de estimaciones</summary><ul>
+            {datos.planes.map(escenario => <li key={escenario.id}>
+              {escenario.kg} kg · {escenario.merma} % de merma · Reserva {pesos.format(Number(escenario.reserva))}
+              {escenario.escenario && <> · <ResultadoCompra resultado={escenario.escenario.resultado} /></>}
+            </li>)}
+          </ul></details>}
+        {resumen.acuerdos && <>
+          {administra && !cerrado && !reasignado && <PlanCompra key={datos.planes?.at(-1)?.id ?? 'inicial'} resumen={resumen} plan={datos.planes?.at(-1)}
+            registrar={registrar} guardar={enviar} />}
+
+          <p>Folio {resumen.folio_compra} · {resumen.kg_comprados} kg comprados
+            {resumen.kg_pendientes != null && <> · {resumen.kg_pendientes} kg pendientes</>}
+          </p>
+          {administra && !cerrado && !reasignado && <Formulario titulo="Agregar ticket de finca"
+            accion="compra" enviar={enviar} campos={camposCompraNueva}>
+            <p>Folio de compra {resumen.folio_compra}</p>
           </Formulario>}
-        {datos.entrega && <Formulario titulo={datos.recepcion ? 'Corregir correo de recepción' : 'Registrar correo de recepción'}
-          accion="recepcion" enviar={enviar}
-          valoresIniciales={{ ...datos.recepcion, fecha: datos.recepcion?.fecha_capturada ?? null, folio: datos.entrega.folio, kgCorreo: datos.recepcion?.kg_correo ?? null }} campos={ [fecha, ['folio','Folio de remisión'], ['sap','Entrada SAP'], ['orden','Orden de compra'],
-            ['kgCorreo','Peso del correo (kg)','decimal'], ['venta','Importe confirmado de producto (MXN)','decimal'],
-            ...(datos.recepcion ? [motivo] : [])] } />}
-        <details className="accion"><summary>Cerrar operación</summary>
-          <Formulario titulo="Cerrar" etiquetaGuardar="Confirmar cierre" accion="cierre" enviar={enviar} campos={[motivo]} />
-          <details className="accion"><summary>Reasignar como nueva solicitud</summary>
-            <form className="captura" onSubmit={async event => {
-              event.preventDefault();
-              const form = event.currentTarget;
-              const valores = new FormData(form);
-              setReasignando(true);
-              setMensaje('');
-              try {
-                await reasignar({ userId: valores.get('userId'), reason: valores.get('reason') });
-                delete form.dataset.dirty;
-                setDatos(await cargar());
-                setMensaje('Viaje reasignado. La solicitud está pendiente de corrección.');
-              } catch (cause) {
-                setMensaje(cause instanceof Error ? cause.message : 'No se pudo reasignar el viaje.');
-              } finally { setReasignando(false); }
-            }}>
-              <p className="ancho-completo">El expediente original quedará como referencia de solo lectura.</p>
-              <label>Encargado<select name="userId" required defaultValue={encargados.some(item => item.user_id === asignado) ? asignado : ''}>
-                <option value="" disabled>Selecciona un encargado</option>
-                {encargados.map(item => <option key={item.user_id} value={item.user_id}>{item.email}</option>)}
-              </select></label>
-              <label>Motivo<input name="reason" minLength={3} maxLength={300} required /></label>
-              <div className="acciones"><Volver disabled={reasignando} onClick={event => {
-                const form = event.currentTarget.form;
-                if (!form || !confirmarSalida()) return;
-                form.reset();
-                delete form.dataset.dirty;
-                form.closest('details')?.removeAttribute('open');
-              }} /><button disabled={reasignando || !encargados.length}>Confirmar reasignación</button></div>
-            </form>
-          </details>
-        </details>
-      </>}
-      {resumen.acuerdos && !reasignado && (administra || !cerrado) && <>
-        {administra && !cerrado && <details><summary>Tarifas sugeridas por ticket</summary>
-          <ul>{datos.tarifas?.map(tarifa => <li key={[tarifa.ambito, tarifa.referencia, tarifa.concepto].join(':')}>
-            {tarifa.ambito === 'viaje' ? 'Este viaje' : tarifa.referencia} · {tarifa.concepto} · {pesos.format(Number(tarifa.tarifa))}/t
-          </li>)}</ul>
-          <Formulario titulo="Configurar tarifa" accion="tarifaGasto" enviar={enviar}
-            campos={ [['ambito','Aplicar por',['viaje','finca','productor']],
-              ['referencia','Nombre de la finca o productor','opcional'], ['concepto','Concepto',conceptosTicket],
-              ['tarifa','Tarifa por tonelada','decimal'], motivo] } />
+          {datos.remisiones?.map(remision => {
+            const tickets = datos.compras.filter(ticket => ticket.productor === remision.productor);
+            const fincas = [...new Set(tickets.flatMap(ticket => ticket.finca ? [ticket.finca] : []))];
+            return <details key={remision.productor}>
+              <summary>{remision.folio} · {remision.productor}</summary>
+              <p>Total {remision.kg} kg · {pesos.format(Number(remision.importe))} · Reserva pactada {pesos.format(Number(remision.reserva))}</p>
+              <p>Reserva sugerida {pesos.format(Number(remision.reserva_sugerida))}</p>
+              {!cerrado && !reasignado && <Formulario titulo="Agregar ticket" accion="compra" enviar={enviar}
+                inicial={{ productor: remision.productor }}
+                campos={camposCompraNueva.filter(campo => campo[0] !== 'productor' && campo[0] !== 'finca')}
+              >
+                <p>{remision.productor} · {remision.folio}</p>
+                <label>Finca<input name="finca" required maxLength={200} list={remision.folio ?? undefined}
+                  defaultValue={fincas.length === 1 ? fincas[0] : undefined} /></label>
+                <datalist id={remision.folio ?? undefined}>{fincas.map(finca => <option key={finca} value={finca} />)}</datalist>
+              </Formulario>}
+              {tickets.map(ticket => <details key={ticket.id}>
+                <summary>{ticket.folio} · {ticket.finca} · {ticket.kg} kg</summary>
+                <p>{ticket.variedad} · {pesos.format(Number(ticket.tarifa))}/t · Importe {pesos.format(Number(ticket.importe))}
+                  {' · '}Reserva {pesos.format(Number(ticket.reserva))}</p>
+                {!cerrado && !reasignado && <Formulario key={ticket.version} titulo="Corregir ticket"
+                  accion="corregirCompra" enviar={enviar} inicial={{ ticket: ticket.id, version: ticket.version }}
+                  valoresIniciales={valoresTicket(ticket)} campos={[...camposTicket, motivo]} />}
+                {capturaGastoTicket(ticket)}
+              </details>)}
+            </details>;
+          })}
+          {!administra && datos.compras.map(ticket => <details key={ticket.id}>
+            <summary>{ticket.folio} · {ticket.finca} · {ticket.kg} kg</summary>
+            {capturaGastoTicket(ticket)}
+          </details>)}
+        </>}
+      </section>
+      <section className="seccion-viaje" hidden={seccion !== 'gastos'}>
+        <h4>Gastos y chofer</h4>
+          {administra && <p>Saldo del chofer {resumen.saldo_chofer == null ? 'pendiente' : pesos.format(Number(resumen.saldo_chofer))}</p>}
+        {resumen.acuerdos && !reasignado && (administra || !cerrado) && <>
+          {administra && !cerrado && <details><summary>Tarifas sugeridas por ticket</summary>
+            <ul>{datos.tarifas?.map(tarifa => <li key={[tarifa.ambito, tarifa.referencia, tarifa.concepto].join(':')}>
+              {tarifa.ambito === 'viaje' ? 'Este viaje' : tarifa.referencia} · {tarifa.concepto} · {pesos.format(Number(tarifa.tarifa))}/t
+            </li>)}</ul>
+            <Formulario titulo="Configurar tarifa" accion="tarifaGasto" enviar={enviar}
+              campos={ [['ambito','Aplicar por',['viaje','finca','productor']],
+                ['referencia','Nombre de la finca o productor','opcional'], ['concepto','Concepto',conceptosTicket],
+                ['tarifa','Tarifa por tonelada','decimal'], motivo] } />
+          </details>}
+          <Formulario titulo="Capturar gasto" accion="gastos" enviar={enviar}
+            beneficiario={datos.beneficiario} campos={camposGasto} canastosViaje={vehiculo.canastos ?? aperturaViaje?.canastos} />
+          {datos.compras.length > 0 && <Formulario titulo="Capturar gasto por ticket de finca" accion="gasto" enviar={enviar}
+            beneficiario={datos.beneficiario} tickets={datos.compras}
+            campos={camposGastoTicket} alCambiar={campo => {
+              if (!['ticket', 'concepto'].includes(campo.name) || !campo.form) return;
+              const seleccion = new FormData(campo.form);
+              sugerirTarifa(String(seleccion.get('ticket') ?? ''), String(seleccion.get('concepto') ?? ''), campo.form);
+            }} />}
+        </>}
+        {administra && resumen.acuerdos && !reasignado && <Formulario titulo="Abonar al flete del chofer" accion="abono" enviar={enviar}
+          campos={[fecha, importe, ['referencia','Referencia']]} />}
+        {(reasignado || !administra) && !!datos.gastos?.length && <details><summary>Gastos registrados</summary>
+          <ul>{datos.gastos.map(gasto => <li key={gasto.id}>{gasto.concepto} · {gasto.beneficiario} · {
+            pesos.format(Number(gasto.importe))} · {gasto.estado}{detalleGastoUnitario(gasto)}</li>)}</ul>
         </details>}
-        <Formulario titulo="Capturar gasto" accion="gastos" enviar={enviar}
-          beneficiario={datos.beneficiario} campos={camposGasto} />
-        {datos.compras.length > 0 && <Formulario titulo="Capturar gasto por ticket de finca" accion="gasto" enviar={enviar}
-          beneficiario={datos.beneficiario} tickets={datos.compras}
-          campos={camposGastoTicket} alCambiar={campo => {
-            if (!['ticket', 'concepto'].includes(campo.name) || !campo.form) return;
-            const seleccion = new FormData(campo.form);
-            sugerirTarifa(String(seleccion.get('ticket') ?? ''), String(seleccion.get('concepto') ?? ''), campo.form);
-          }} />}
+        {administra && reasignado && !!datos.abonos?.length && <details><summary>Abonos registrados</summary>
+          <ul>{datos.abonos.map(abono => <li key={abono.id}>{abono.referencia} · {
+            pesos.format(Number(abono.importe))}</li>)}</ul>
+        </details>}
+        {administra && !reasignado && datos.gastos?.map(gasto => <Formulario key={gasto.id} titulo={
+          gasto.concepto + ' · ' + gasto.beneficiario + ' · ' + pesos.format(Number(gasto.importe)) + ' · ' + gasto.estado
+          + detalleGastoUnitario(gasto) + (gasto.requiere_revision_ticket ? ' · Revisar peso del ticket' : '')
+        } accion="revision" enviar={enviar} inicial={{ gasto: gasto.id }}
+          valoresIniciales={gasto} campos={ [['estado','Resultado de la revisión',['aprobado','devuelto']], importe, motivo] } />)}
+      </section>
+      {administra && <>
+      <section className="seccion-viaje" hidden={seccion !== 'entrega'}>
+        <h4>Entrega y cierre</h4>
+          {datos.ticketFabrica && <p>Ticket de fábrica {datos.ticketFabrica.folio} · {datos.ticketFabrica.kg} kg</p>}
+          {datos.recepcion && <p>Entrada SAP {datos.recepcion.sap} · {datos.recepcion.kg_correo} kg</p>}
+          {datos.entrega && typeof resumen.acuerdos === 'object' && resumen.acuerdos && <details>
+            <summary>Remisión de entrega · {datos.entrega.folio}</summary>
+            <p>{datos.entrega.fecha} · {resumen.acuerdos.producto} · {datos.entrega.kg} kg</p>
+            <p>Precio pactado por tonelada {pesos.format(Number(resumen.acuerdos.venta))}</p>
+          </details>}
+        {administra && resumen.acuerdos && !cerrado && !reasignado && <>
+          <Formulario key={datos.ticketFabrica ? 'corregir-ticket' : 'registrar-ticket'}
+            titulo={datos.ticketFabrica ? 'Corregir ticket de fábrica' : 'Registrar ticket de fábrica'}
+            accion="ticketFabrica" enviar={enviar} valoresIniciales={datos.ticketFabrica} campos={[fecha,
+              ['folio','Folio del ticket'], ['kg','Peso neto (kg)','decimal'], ...(datos.ticketFabrica ? [motivo] : [])]} />
+          {!datos.entrega && datos.ticketFabrica?.folio?.trim() && datos.ticketFabrica.fecha && Number(datos.ticketFabrica.kg) > 0 &&
+            typeof resumen.acuerdos === 'object' && <Formulario titulo="Emitir remisión de entrega" accion="entrega" enviar={enviar}
+              etiquetaGuardar="Emitir remisión" campos={[fecha]} valoresIniciales={datos.ticketFabrica}>
+              <p className="ancho-completo">{resumen.customer} · {resumen.acuerdos.producto} · {datos.ticketFabrica.kg} kg · {
+                pesos.format(Number(resumen.acuerdos.venta))}/t. El folio se asigna al emitir.</p>
+            </Formulario>}
+          {datos.entrega && <Formulario titulo={datos.recepcion ? 'Corregir correo de recepción' : 'Registrar correo de recepción'}
+            accion="recepcion" enviar={enviar}
+            valoresIniciales={{ ...datos.recepcion, fecha: datos.recepcion?.fecha_capturada ?? null, folio: datos.entrega.folio, kgCorreo: datos.recepcion?.kg_correo ?? null }} campos={ [fecha, ['folio','Folio de remisión'], ['sap','Entrada SAP'], ['orden','Orden de compra'],
+              ['kgCorreo','Peso del correo (kg)','decimal'], ['venta','Importe confirmado de producto (MXN)','decimal'],
+              ...(datos.recepcion ? [motivo] : [])] } />}
+          <details className="accion"><summary>Cerrar operación</summary>
+            <Formulario titulo="Cerrar" etiquetaGuardar="Confirmar cierre" accion="cierre" enviar={enviar} campos={[motivo]} />
+            <details className="accion"><summary>Reasignar como nueva solicitud</summary>
+              <form className="captura" onSubmit={async event => {
+                event.preventDefault();
+                const form = event.currentTarget;
+                const valores = new FormData(form);
+                setReasignando(true);
+                setMensaje('');
+                try {
+                  await reasignar({ userId: valores.get('userId'), reason: valores.get('reason') });
+                  delete form.dataset.dirty;
+                  setDatos(await cargar());
+                  setMensaje('Viaje reasignado. La solicitud está pendiente de corrección.');
+                } catch (cause) {
+                  setMensaje(cause instanceof Error ? cause.message : 'No se pudo reasignar el viaje.');
+                } finally { setReasignando(false); }
+              }}>
+                <p className="ancho-completo">El expediente original quedará como referencia de solo lectura.</p>
+                <label>Encargado<select name="userId" required defaultValue={encargados.some(item => item.user_id === asignado) ? asignado : ''}>
+                  <option value="" disabled>Selecciona un encargado</option>
+                  {encargados.map(item => <option key={item.user_id} value={item.user_id}>{item.email}</option>)}
+                </select></label>
+                <label>Motivo<input name="reason" minLength={3} maxLength={300} required /></label>
+                <div className="acciones"><Volver disabled={reasignando} onClick={event => {
+                  const form = event.currentTarget.form;
+                  if (!form || !confirmarSalida()) return;
+                  form.reset();
+                  delete form.dataset.dirty;
+                  form.closest('details')?.removeAttribute('open');
+                }} /><button disabled={reasignando || !encargados.length}>Confirmar reasignación</button></div>
+              </form>
+            </details>
+          </details>
+        </>}
+      </section>
+      <section className="seccion-viaje" hidden={seccion !== 'cobranza'}>
+        <h4>Cobranza del viaje</h4>
+          <dl className="indicadores">
+            {([
+              ['Saldo por cobrar de piña', resumen.saldo_producto ?? resumen.venta_confirmada],
+              ['Saldo por cobrar de flete', resumen.saldo_flete ?? resumen.flete_cliente],
+            ] as const).map(([etiqueta, valor]) => <div key={etiqueta}>
+              <dt>{etiqueta}</dt><dd>{valor == null ? 'Pendiente' : pesos.format(Number(valor))}</dd>
+            </div>)}
+          </dl>
+          {Number(resumen.adelanto_flete_agrupado) > 0 && <p>La remisión de flete tiene un adelanto agrupado. Consulta su saldo neto en Cobranza.</p>}
+          <button type="button" onClick={abrirCobranza}>Ver saldos de este viaje</button>
+      </section>
       </>}
-      {administra && resumen.acuerdos && !reasignado && <Formulario titulo="Abonar al flete del chofer" accion="abono" enviar={enviar}
-        campos={[fecha, importe, ['referencia','Referencia']]} />}
-      {(reasignado || !administra) && !!datos.gastos?.length && <details><summary>Gastos registrados</summary>
-        <ul>{datos.gastos.map(gasto => <li key={gasto.id}>{gasto.concepto} · {gasto.beneficiario} · {
-          pesos.format(Number(gasto.importe))} · {gasto.estado}</li>)}</ul>
-      </details>}
-      {administra && reasignado && !!datos.abonos?.length && <details><summary>Abonos registrados</summary>
-        <ul>{datos.abonos.map(abono => <li key={abono.id}>{abono.referencia} · {
-          pesos.format(Number(abono.importe))}</li>)}</ul>
-      </details>}
-      {administra && !reasignado && datos.gastos?.map(gasto => <Formulario key={gasto.id} titulo={
-        gasto.concepto + ' · ' + gasto.beneficiario + ' · ' + pesos.format(Number(gasto.importe)) + ' · ' + gasto.estado
-        + (gasto.requiere_revision_ticket ? ' · Revisar peso del ticket' : '')
-      } accion="revision" enviar={enviar} inicial={{ gasto: gasto.id }}
-        valoresIniciales={gasto} campos={ [['estado','Resultado de la revisión',['aprobado','devuelto']], importe, motivo] } />)}
     </>}
   </section>;
 }

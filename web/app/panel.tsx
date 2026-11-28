@@ -3,10 +3,11 @@
 import { usePathname, useRouter } from 'next/navigation';
 import { Empleados } from './empleados';
 import { RevisionSolicitud, ReferenciaViaje } from './solicitudes';
-import { type FormEvent, useCallback, useState } from 'react';
+import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { Apertura, confirmarSalida, DatosDelViaje, type DatosApertura } from './apertura';
 import { Volver } from './volver';
 import { Operacion, type Expediente } from './operacion';
+import { Cobranza, type EstadoCobranza } from './cobranza';
 
 type Business = { id: string; name: string; status: string; canOpen: boolean; canDelete: boolean; nextStatus: string | null };
 type Profile = { email: string; superAdmin: boolean; canRegisterBusiness: boolean; businesses: Business[] };
@@ -36,11 +37,26 @@ async function request<T>(path: string, token = '', method = 'GET', body?: objec
   return data as T;
 }
 
+type Apartado = 'inicio' | 'viajes' | 'solicitudes' | 'cobranza' | 'administracion';
+const menuNegocio: { id: Apartado; etiqueta: string; administrativo?: boolean }[] = [
+  { id: 'inicio', etiqueta: 'Inicio' }, { id: 'viajes', etiqueta: 'Viajes' },
+  { id: 'solicitudes', etiqueta: 'Solicitudes' },
+  { id: 'cobranza', etiqueta: 'Cobranza', administrativo: true },
+  { id: 'administracion', etiqueta: 'Administración', administrativo: true },
+];
+
+function guardarRuta(negocio: string, apartado: Apartado = 'inicio', viaje = '') {
+  const contexto = new URLSearchParams({ negocio, apartado });
+  if (viaje) contexto.set('viaje', viaje);
+  const ruta = '/?' + contexto;
+  if (window.location.pathname + window.location.search !== ruta) window.history.pushState(null, '', ruta);
+}
+
 export default function Panel() {
   const router = useRouter();
   const pathname = usePathname();
   const rutaEmpleados = /^\/negocios\/([^/]+)\/empleados$/.exec(pathname);
-  const [apartado, setApartado] = useState<'viajes' | 'solicitudes' | null>(null);
+  const [apartado, setApartado] = useState<Apartado>('inicio');
   const [viajeSeleccionado, setViajeSeleccionado] = useState('');
   const [token, setToken] = useState('');
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -60,13 +76,16 @@ export default function Panel() {
   const consultarEmpleados = useCallback(<T,>(sufijo: string, method?: string, body?: object) =>
     request<T>('/businesses/' + negocioEmpleados?.id + '/members' + sufijo, token, method, body),
   [negocioEmpleados?.id, token]);
-  const vistaPorApartado = details?.role === 'administrador';
   const encargados = details?.members.filter(item => item.role === 'encargado') ?? [];
   const base = '/businesses/' + business?.id;
 
   const rutaOperacion = base + '/trips/' + viaje + '/operation';
   const cargarOperacion = useCallback(() => request<Expediente>(rutaOperacion, token), [rutaOperacion, token]);
   const registrarOperacion = (datos: object) => request(rutaOperacion, token, 'POST', datos);
+
+  const rutaCobranza = base + '/cobranza';
+  const cargarCobranza = useCallback(() => request<EstadoCobranza>(rutaCobranza, token), [rutaCobranza, token]);
+  const registrarCobranza = (datos: object) => request(rutaCobranza, token, 'POST', datos);
 
   async function run(work: () => Promise<void>) {
     setBusy(true);
@@ -102,17 +121,18 @@ export default function Panel() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  async function select(item: Business) {
-    const contenido = item.canOpen ? await request<Details>('/businesses/' + item.id, token) : null;
+  async function select(item: Business, accessToken = token) {
+    const contenido = item.canOpen ? await request<Details>('/businesses/' + item.id, accessToken) : null;
     if (item.id !== business?.id) {
       setViaje(null);
       setViajeSeleccionado('');
-      setApartado(null);
+      setApartado('inicio');
       setCaptura(null);
       setEliminar(false);
     }
     setBusiness(item);
     setDetails(contenido);
+    return contenido;
   }
 
   async function write(path: string, data: object, method = 'POST') {
@@ -129,13 +149,61 @@ export default function Panel() {
     setNotice('Cambios guardados.');
   }
 
-  function cambiarApartado(valor: 'viajes' | 'solicitudes' | null, seleccionar = '') {
-    if (!confirmarSalida()) return;
+  function cambiarApartado(valor: Apartado, seleccionar = '') {
+    if (!business || !confirmarSalida()) return;
+    guardarRuta(business.id, valor, seleccionar);
     setApartado(valor);
     setViajeSeleccionado(seleccionar);
-    setViaje(seleccionar || null);
+    setViaje(valor === 'viajes' && details?.trips.some(item => item.id === seleccionar && item.can_open) ? seleccionar : null);
     setCaptura(null);
   }
+
+  function recuperarVista(contenido: Details | null) {
+    const contexto = new URLSearchParams(window.location.search);
+    const destino = menuNegocio.find(item => item.id === contexto.get('apartado') &&
+      (!item.administrativo || contenido?.canManageTrips))?.id ?? 'inicio';
+    const seleccionado = contenido?.trips.find(item => item.id === contexto.get('viaje'));
+    const folio = seleccionado && (destino === 'viajes' || destino === 'cobranza') ? seleccionado.id : '';
+    setApartado(destino);
+    setViajeSeleccionado(folio);
+    setViaje(destino === 'viajes' && seleccionado?.can_open ? folio : null);
+    setCaptura(null);
+  }
+
+  useEffect(() => {
+    if (!profile || !token) return;
+    function volverEnHistorial() {
+      if (window.location.pathname !== '/') return;
+      if (!confirmarSalida()) {
+        if (business) guardarRuta(business.id, apartado, viajeSeleccionado);
+        return;
+      }
+      const id = new URLSearchParams(window.location.search).get('negocio');
+      const item = profile?.businesses.find(negocio => negocio.id === id);
+      if (!item) {
+        setBusiness(null);
+        setDetails(null);
+        setApartado('inicio');
+        setViaje(null);
+        setViajeSeleccionado('');
+        setCaptura(null);
+        return;
+      }
+      if (item.id === business?.id && details) recuperarVista(details);
+      else {
+        void request<Details>('/businesses/' + item.id, token)
+          .then(contenido => {
+            if (new URLSearchParams(window.location.search).get('negocio') !== item.id) return;
+            setBusiness(item);
+            setDetails(contenido);
+            recuperarVista(contenido);
+          })
+          .catch(error => setError(error.message));
+      }
+    }
+    window.addEventListener('popstate', volverEnHistorial);
+    return () => window.removeEventListener('popstate', volverEnHistorial);
+  }, [apartado, business, details, profile, token, viajeSeleccionado]);
 
   function abrirCaptura(id: string) {
     if (!confirmarSalida()) return;
@@ -180,8 +248,9 @@ export default function Panel() {
     <header><strong>ponitero</strong>
       {profile && <button type="button" disabled={busy} onClick={() => {
         if (!confirmarSalida()) return;
+        if (window.location.pathname === '/') window.history.replaceState(null, '', '/');
         setCaptura(null); setEliminar(false); setNombre(''); setDuplicado(null); setRegistroNegocio(false);
-        setApartado(null); setViajeSeleccionado('');
+        setApartado('inicio'); setViajeSeleccionado('');
         setViaje(null); setToken(''); setProfile(null); setBusiness(null); setDetails(null); setError(''); setNotice('');
       }}>Cerrar sesión</button>}
     </header>
@@ -198,8 +267,14 @@ export default function Panel() {
           return;
         }
         const session = await request<{ accessToken: string }>('/auth/login', '', 'POST', body);
-        setProfile(await request<Profile>('/me', session.accessToken));
+        const perfil = await request<Profile>('/me', session.accessToken);
+        setProfile(perfil);
         setToken(session.accessToken);
+        if (!rutaEmpleados) {
+          const destino = new URLSearchParams(window.location.search).get('negocio');
+          const negocio = perfil.businesses.find(item => item.id === destino);
+          if (negocio) recuperarVista(await select(negocio, session.accessToken));
+        }
       })}>
         <label>Correo<input name="email" type="email" autoComplete="email" required /></label>
         <label>Contraseña<input name="password" type="password" autoComplete={register ? 'new-password' : 'current-password'} minLength={8} required /></label>
@@ -215,7 +290,8 @@ export default function Panel() {
       consultar={consultarEmpleados}
       volver={() => void run(async () => {
         await select(negocioEmpleados);
-        router.push('/');
+        setApartado('administracion');
+        router.push('/?negocio=' + negocioEmpleados.id + '&apartado=administracion');
       })} /> : <section className="panel">
         <Volver etiqueta="Volver a negocios" onClick={() => router.push('/')} />
         <p>El negocio no está disponible.</p>
@@ -227,7 +303,10 @@ export default function Panel() {
           <h2>Negocios</h2>
           {!profile.businesses.length && <p>Aún no tienes negocios vinculados.</p>}
           {profile.businesses.map(item => <button className="business secondary" key={item.id}
-            aria-pressed={item.id === business?.id} disabled={busy} onClick={() => { if (confirmarSalida()) void run(() => select(item)); }}>
+            aria-pressed={item.id === business?.id} disabled={busy} onClick={() => { if (confirmarSalida() && business?.id !== item.id) void run(async () => {
+              await select(item);
+              guardarRuta(item.id);
+            }); }}>
             <strong>{item.name}</strong><span>{item.status}</span>
           </button>)}
           {profile.canRegisterBusiness && (registroNegocio ? <form data-dirty={Boolean(nombre)}
@@ -248,6 +327,7 @@ export default function Panel() {
                   const existente = actualizado.businesses.find(item => item.id === duplicado.existingId);
                   if (existente) {
                     await select(existente);
+                    guardarRuta(existente.id);
                     setDuplicado(null);
                     setRegistroNegocio(false);
                   } else setDuplicado({ existingId: null });
@@ -258,22 +338,38 @@ export default function Panel() {
               setRegistroNegocio(false);
             }} />
           </form> : <button type="button" disabled={busy} onClick={() => setRegistroNegocio(true)}>Registrar negocio</button>)}
+          {business && details && <nav className="menu-negocio" aria-label="Apartados del negocio">
+            {menuNegocio.filter(item => !item.administrativo || details.canManageTrips).map(item => <button key={item.id}
+              type="button" className={apartado === item.id ? undefined : 'secondary'}
+              aria-current={apartado === item.id ? 'page' : undefined} disabled={busy}
+              onClick={() => { if (apartado !== item.id) cambiarApartado(item.id); }}>{item.etiqueta}</button>)}
+          </nav>}
         </aside>
         {business && <section className="panel">
           <div className="encabezado-negocio">
             <Volver etiqueta="Volver a negocios" disabled={busy} onClick={() => {
               if (!confirmarSalida()) return;
-              setBusiness(null); setDetails(null); setViaje(null); setViajeSeleccionado(''); setApartado(null); setCaptura(null); setEliminar(false);
+              window.history.pushState(null, '', '/');
+              setBusiness(null); setDetails(null); setViaje(null); setViajeSeleccionado(''); setApartado('inicio'); setCaptura(null); setEliminar(false);
             }} />
             <h2>{business.name}</h2>
-            {details && !vistaPorApartado && captura !== 'nueva' && <button type="button" disabled={busy} onClick={() => abrirCaptura('nueva')}>
+            {details && !details.canManageTrips && captura !== 'nueva' && <button type="button" disabled={busy} onClick={() => abrirCaptura('nueva')}>
               {details.canManageTrips ? 'Registrar viaje' : 'Solicitar viaje'}
             </button>}
           </div>
           <p>{business.status}{details && ' · ' + details.role}</p>
-          {details && !vistaPorApartado && captura === 'nueva' && <Apertura titulo={details.canManageTrips ? 'Registrar viaje' : 'Enviar solicitud'}
+          {details && !details.canManageTrips && captura === 'nueva' && <Apertura titulo={details.canManageTrips ? 'Registrar viaje' : 'Enviar solicitud'}
             busy={busy} volver={() => setCaptura(null)}
             enviar={enviarApertura(base + (details.canManageTrips ? '/trips' : '/trip-requests'), 'POST')} />}
+          {!business.canOpen && <p>El negocio requiere aprobación para habilitar la operación.</p>}
+          {(!business.canOpen || apartado === 'administracion') && <>
+            <h3>Administración</h3>
+            {details?.canManageTrips && <div className="acciones">
+              <button type="button" disabled={busy} onClick={() => {
+                if (confirmarSalida()) router.push('/negocios/' + business.id + '/empleados');
+              }}>Empleados</button>
+              <button type="button" disabled={busy} onClick={() => void run(exportarNegocio)}>Exportar viajes</button>
+            </div>}
           {business.nextStatus && <form onSubmit={event => submit(event, data =>
             write(base + '/status', { status: business.nextStatus, reason: data.get('reason') }, 'PATCH'))}>
             <label>Motivo<input name="reason" minLength={3} maxLength={300} required /></label>
@@ -291,49 +387,51 @@ export default function Panel() {
             </div>
           </form> : <button type="button" className="secondary" disabled={busy}
             onClick={() => setEliminar(true)}>Eliminar negocio</button>)}
-          {!business.canOpen && <p>El negocio requiere aprobación para habilitar la operación.</p>}
-          {details?.canManageTrips && <div className="acciones">
-            {vistaPorApartado && <>
-              <button type="button" aria-pressed={apartado === 'viajes'} disabled={busy} onClick={() => cambiarApartado('viajes')}>Viajes</button>
-              <button type="button" aria-pressed={apartado === 'solicitudes'} disabled={busy} onClick={() => cambiarApartado('solicitudes')}>Solicitudes de viaje</button>
-            </>}
-            <button type="button" disabled={busy} onClick={() => {
-              if (!confirmarSalida()) return;
-              setCaptura(null); setApartado(null); setViaje(null); setViajeSeleccionado('');
-              router.push('/negocios/' + business.id + '/empleados');
-            }}>Empleados</button>
-            <button type="button" disabled={busy} onClick={() => void run(exportarNegocio)}>Exportar viajes</button>
-          </div>}
-          {vistaPorApartado && apartado && <p><Volver etiqueta="Volver al menú del negocio" disabled={busy}
-            onClick={() => cambiarApartado(null)} /></p>}
-          {details && <>
-            {(!vistaPorApartado || apartado === 'viajes') && <>
+          </>}
+          {details && apartado === 'inicio' && <section>
+            <h3>Pendientes</h3>
+            <h4>{details.canManageTrips ? 'Solicitudes por revisar' : 'Solicitudes por corregir'}</h4>
+            {details.requests.filter(item => details.canManageTrips ? item.status === 'pendiente' :
+              ['devuelta','pendiente_correccion'].includes(item.status)).map(item => <p key={item.id}>
+                <button type="button" className="secondary" onClick={() => {
+                  cambiarApartado('solicitudes');
+                  requestAnimationFrame(() => document.getElementById('solicitud-' + item.id)?.focus());
+                }}>{item.datos.reference} · {item.datos.customer}</button>
+              </p>)}
+            {!details.requests.some(item => details.canManageTrips ? item.status === 'pendiente' :
+              ['devuelta','pendiente_correccion'].includes(item.status)) && <p>Sin solicitudes pendientes.</p>}
+            <h4>{details.canManageTrips ? 'Viajes abiertos' : 'Mis viajes asignados'}</h4>
+            {details.trips.filter(item => !item.cerrado_en && !item.reasignado_en).map(item => <p key={item.id}>
+              <button type="button" className="secondary" onClick={() => cambiarApartado('viajes', item.id)}>
+                {item.reference} · {item.customer} · {item.can_open ? 'Ver expediente' : 'Apertura pendiente'}
+              </button>
+            </p>)}
+            {!details.trips.some(item => !item.cerrado_en && !item.reasignado_en) && <p>Sin viajes abiertos.</p>}
+            {details.canManageTrips && <button type="button" className="secondary"
+              onClick={() => cambiarApartado('cobranza')}>Consultar saldos</button>}
+          </section>}
+          {details?.canManageTrips && apartado === 'cobranza' &&
+            <Cobranza key={business.id} viajeFiltrado={viajeSeleccionado} limpiarFiltro={() => cambiarApartado('cobranza')} cargar={cargarCobranza} registrar={registrarCobranza} />}
+          {details && apartado !== 'cobranza' && <>
+            {apartado === 'viajes' && <>
             <h3>Viajes</h3>
-            {vistaPorApartado && <>
+            {details.canManageTrips && <>
               {captura === 'nueva' ? <Apertura titulo="Registrar viaje" busy={busy} volver={() => setCaptura(null)}
                 enviar={enviarApertura(base + '/trips', 'POST')} /> :
                 <button type="button" disabled={busy} onClick={() => abrirCaptura('nueva')}>Registrar viaje</button>}
-              <label>Selecciona un viaje<select disabled={busy} value={viajeSeleccionado} onChange={event => {
-                if (confirmarSalida()) {
-                  setCaptura(null);
-                  setViaje(null);
-                  setViajeSeleccionado(event.target.value);
-                }
-              }}>
-                <option value="">Selecciona un viaje</option>
-                {details.trips.map(item => <option key={item.id} value={item.id}>{item.reference} · {item.customer}</option>)}
-              </select></label>
             </>}
             {!details.trips.length && <p>Aún no hay viajes disponibles.</p>}
-            {details.trips.filter(trip => !vistaPorApartado || trip.id === viajeSeleccionado).map(trip => <article id={'viaje-' + trip.id} key={trip.id}>
-              <strong>{trip.reference}</strong> · {trip.customer}{trip.reasignado_en && ' · Reasignado'}
+            {[...details.trips].sort((a,b) => Number(Boolean(a.cerrado_en || a.reasignado_en)) -
+              Number(Boolean(b.cerrado_en || b.reasignado_en)))
+              .filter(trip => !viajeSeleccionado || trip.id === viajeSeleccionado).map(trip => <article id={'viaje-' + trip.id} key={trip.id}>
+              <strong>{trip.reference}</strong> · {trip.customer} · {trip.reasignado_en ? 'Reasignado' : trip.cerrado_en ? 'Cerrado' : 'Abierto'}
+              {viajeSeleccionado && !viaje && <p><Volver etiqueta="Volver al listado de viajes"
+                onClick={() => cambiarApartado('viajes')} /></p>}
               {trip.can_open ? <p>{viaje === trip.id ?
                 <Volver etiqueta="Volver al listado de viajes" disabled={busy}
-                  onClick={() => { if (confirmarSalida()) { setViaje(null); if (vistaPorApartado) setViajeSeleccionado(''); } }} /> :
+                  onClick={() => cambiarApartado('viajes')} /> :
                 <button type="button" className="secondary" disabled={busy} onClick={() => {
-                  if (!confirmarSalida()) return;
-                  setCaptura(null);
-                  setViaje(trip.id);
+                  cambiarApartado('viajes', trip.id);
                 }}>Abrir expediente</button>}</p> :
                 details.canManageTrips && !trip.reasignado_en ? captura === trip.id ?
                   <Apertura key={trip.id} titulo="Guardar apertura" busy={busy} folioFijo vehiculoFijo={trip.vehicle_assigned}
@@ -341,7 +439,7 @@ export default function Panel() {
                     enviar={enviarApertura(base + '/trips/' + trip.id + '/opening', 'PATCH')} />
                   : <p><button type="button" disabled={busy} onClick={() => abrirCaptura(trip.id)}>Completar apertura</button></p>
                 : <p>Administración debe completar los acuerdos del viaje.</p>}
-              {trip.vehicle_assigned ? <details><summary>Vehículo · {trip.vehicle.placas}</summary>
+              {trip.vehicle_assigned ? viaje !== trip.id && <details><summary>Vehículo · {trip.vehicle.placas}</summary>
                 <DatosDelViaje datos={trip.vehicle} />
               </details> : trip.can_assign_vehicle && captura !== trip.id && (captura === 'vehiculo-' + trip.id ?
                 <Apertura key={'vehiculo-' + trip.id} titulo="Asignar vehículo" soloVehiculo busy={busy}
@@ -350,8 +448,8 @@ export default function Panel() {
                 <p><button type="button" className="secondary" disabled={busy}
                   onClick={() => abrirCaptura('vehiculo-' + trip.id)}>Asignar vehículo</button></p>)}
               {viaje === trip.id && <>
-                {trip.apertura && <details><summary>Datos de apertura</summary><DatosDelViaje datos={trip.apertura} /></details>}
-                <Operacion key={trip.id} cargar={cargarOperacion} registrar={registrarOperacion} administra={details.canManageTrips}
+                <Operacion key={trip.id} aperturaViaje={trip.apertura} vehiculo={trip.vehicle}
+                  abrirCobranza={() => cambiarApartado('cobranza', trip.id)} cargar={cargarOperacion} registrar={registrarOperacion} administra={details.canManageTrips}
                   encargados={encargados} asignado={trip.assigned.length === 1 ? trip.assigned[0] : ''}
                   reasignar={async datos => {
                     await request(base + '/trips/' + trip.id + '/reassignment', token, 'POST', datos);
@@ -372,12 +470,12 @@ export default function Panel() {
               </>}
             </article>)}
             </>}
-            {(!vistaPorApartado || apartado === 'solicitudes') && <>
+            {apartado === 'solicitudes' && <>
             <h3>{details.canManageTrips ? 'Solicitudes de viaje' : 'Mis solicitudes'}</h3>
             {!details.requests.length && <p>Aún no hay solicitudes.</p>}
-            {details.requests.map(solicitud => {
+            {[...details.requests].sort((a,b) => Number(b.status === 'pendiente') - Number(a.status === 'pendiente')).map(solicitud => {
               const path = base + '/trip-requests/' + solicitud.id;
-              return <article key={solicitud.id}>
+              return <article key={solicitud.id} id={'solicitud-' + solicitud.id} tabIndex={-1}>
                 <strong>{solicitud.datos.reference}</strong> · {solicitud.datos.customer} · {
                   solicitud.status === 'pendiente' ? 'Pendiente de aprobación' : solicitud.status === 'devuelta' ? 'Devuelta' : solicitud.status === 'cancelada' ? 'Cancelada' :
                   solicitud.status === 'pendiente_correccion' ? 'Pendiente de corrección' : 'Aprobada'
@@ -393,8 +491,8 @@ export default function Panel() {
                   </li>)}</ul>
                 </details>}
                 {solicitud.trip_id && details.trips.some(trip => trip.id === solicitud.trip_id) &&
-                  <p>{vistaPorApartado ? <button type="button" className="secondary" onClick={() => cambiarApartado('viajes', solicitud.trip_id!)}>
-                    Ir al viaje aprobado</button> : <a href={'#viaje-' + solicitud.trip_id}>Ir al viaje aprobado</a>}</p>}
+                  <p><button type="button" className="secondary" onClick={() => cambiarApartado('viajes', solicitud.trip_id!)}>
+                    Ir al viaje aprobado</button></p>}
                 {details.canManageTrips && solicitud.status === 'pendiente' && <RevisionSolicitud
                   key={solicitud.id + ':' + solicitud.version} inicial={solicitud.datos} puedeAprobar={solicitud.can_approve}
                   busy={busy} resolver={datos => run(() => write(path + '/review', { ...datos, version: solicitud.version }))} />}
@@ -406,7 +504,7 @@ export default function Panel() {
               </article>;
             })}
             </>}
-            {details.canManageTrips && <>
+            {details.canManageTrips && apartado === 'administracion' && <>
               <details><summary>Historial de actividad</summary>
                 <ul>{details.history.map(entry => <li key={entry.id}>
                   {entry.action.replaceAll('_', ' ')} · {entry.email} · {new Date(entry.created_at).toLocaleString('es-MX')}

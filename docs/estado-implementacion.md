@@ -5,7 +5,7 @@
 - Registro y aprobación de negocios, roles, asignación de viajes e historial.
 - Altas, bajas y permisos por negocio. La eliminación confirmada revoca el acceso y conserva las operaciones y su historial. El registro detecta nombres equivalentes por mayúsculas y espacios.
 - Apertura directa y solicitudes de viaje con devolución, corrección, aprobación y asignación al solicitante. La apertura registra los datos comerciales y del vehículo en dos pasos que conservan la captura al volver.
-- El panel del administrador muestra un apartado y un viaje a la vez. La página **Empleados** pagina de 20 en 20 y ofrece alta, edición de permisos y bajas individuales o múltiples según el rol.
+- El panel abre en **Inicio**, con pendientes y accesos por rol. El expediente separa compras, gastos y chofer, entrega y cierre, y cobranza. La página **Empleados** pagina de 20 en 20 y ofrece alta, edición de permisos y bajas individuales o múltiples según el rol.
 - Administración puede editar una solicitud antes de aprobarla o devolverla, y cancelarla con motivo. Desde el cierre puede reasignar un viaje y generar una solicitud editable que conserva el vínculo con el expediente original de solo lectura.
 - Asignación de vehículo por administración o por un encargado del viaje. Las placas identifican al vehículo y se pueden reutilizar cuando termina el viaje anterior. El panel tiene **Solicitar viaje** en el encabezado y flechas de regreso.
 - **Planear la compra** compara ofertas de uno o varios productores por utilidad y margen después de la reserva del 1.25%. Precarga la carga y la merma sugerida para mayo o diciembre, incorpora el costo y peso de los tickets guardados y conserva versiones al guardar. La primera estimación sigue siendo la base de la reserva sugerida por productor.
@@ -14,10 +14,13 @@
 - **Comprar a productores** agrupa los tickets por productor y muestra el folio base y los kilos comprados y pendientes. Las remisiones de compra usan el consecutivo `C-n` por negocio con un sufijo fijo por productor. Administración puede corregir el ticket de un viaje abierto con motivo e historial. Los gastos vinculados a un peso corregido quedan señalados para revisión. El encargado puede iniciar un gasto desde un ticket de su viaje asignado.
 - La remisión de entrega se habilita con el ticket de fábrica completo. Precarga los datos del viaje y asigna un folio consecutivo `F-n` por negocio al emitir. La migración conserva las remisiones históricas.
 - Captura y aprobación de gastos, abonos al chofer, cierre operativo y cálculo de costo, merma y rentabilidad.
-- Captura de gastos generales con importes independientes, un concepto opcional y beneficiario editable precargado con el correo del encargado asignado.
+- En **Capturar gasto**, Administración y encargados asignados pueden registrar varios **Conceptos adicionales** con cantidad y tarifa unitaria. **Canastos** precarga la cantidad del vehículo cuando existe. La API calcula los importes y guarda el lote completo para revisión.
 
 - Catálogo de tarifas de gasto por viaje, finca o productor. En un ticket, la API sugiere la tarifa por concepto y calcula el importe con el peso vigente.
 - **Exportar viajes** descarga un archivo JSON con los viajes y expedientes del negocio para administración.
+
+- **Cobranza** registra facturas de piña y remisiones de flete con uno o varios viajes confirmados del mismo cliente. Muestra importes y saldos separados, retenciones documentadas y depósitos pendientes de aplicar. La remisión de flete permite descargar su nota operativa. La vista abre en **Saldos por viaje** y organiza la captura en **Facturas y fletes**, **Depósitos y adelantos** y **Aplicaciones y devoluciones**.
+- Administración registra adelantos con temporada de origen, aplica parcialidades a facturas o al encabezado de una remisión de flete y registra devoluciones con referencia. El expediente muestra los saldos por concepto y el historial conserva las aplicaciones.
 
 ## Verificación
 
@@ -35,11 +38,18 @@ En Supabase local se verificó que las dos opciones de diciembre dejan $15,104.6
 
 La migración conserva las coincidencias de nombre históricas y habilita la gestión de encargados para administradores existentes. Las cuentas administrativas nuevas requieren el permiso del superadministrador. Los viajes anteriores con acuerdos conservan el acceso a su expediente. Los viajes anteriores sin acuerdos requieren completar la apertura.
 
+Con Supabase local y cuentas de demostración se verificaron la facturación agrupada después del cierre, los depósitos sin aplicar, el pago parcial por viaje, el descuento único en una remisión de flete, el uso de adelantos entre temporadas, las devoluciones parciales y el rechazo de importes excesivos o concurrentes. La API rechazó el acceso por un encargado y por el administrador de otro negocio.
+
+En el navegador local se verificó con una cuenta de demostración administrativa que el negocio abre en **Inicio**, que se puede abrir el expediente desde la lista de pendientes y que un borrador se conserva al cambiar de sección.
+
+Con cuentas de demostración en Supabase local se verificó el cálculo de 7 canastos a $20 ($140) y 2 escaleras a $25.50 ($51), la consulta de cantidad y tarifa y el bloqueo a otro negocio.
+
+Con cuentas de demostración se verificó que Administración y el encargado pueden registrar canastos, escalera y agua en un guardado, con importes de $210, $50 y $30.50. La API rechazó el lote completo si un renglón excedía el límite y bloqueó la consulta o captura desde otro negocio.
+
 ## Pendiente
 
 - Reportes por negocio y exportación de datos fuera del expediente de viaje.
 - Catálogos generales, evidencias adjuntas y cancelación con traslado de gastos o adelantos.
-- Facturas agrupadas, cobros diferenciados de producto y flete, depósitos y adelantos del cliente.
 - Expediente fiscal, custodia de XML y conciliación contable.
 
 Consulta los criterios de aceptación de cada módulo en el [análisis funcional](analisis-funcional.md).

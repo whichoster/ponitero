@@ -43,3 +43,14 @@ article { padding: .75rem 0; border-top: 1px solid #c6d7cb; }
 .empleados dialog { width: min(90vw, 32rem); max-height: 85vh; border: 1px solid #c6d7cb; border-radius: .75rem; padding: 1rem; color: inherit; }
 .empleados dialog::backdrop { background: #19382b66; }
 .captura .ancho-completo { grid-column: 1 / -1; margin: 0; }
+
+.menu-negocio { display: grid; gap: .5rem; margin-top: 1rem; }
+.menu-negocio button { text-align: left; }
+.seccion-viaje { margin-top: 1rem; }
+@media (max-width: 680px) {
+  .menu-negocio { display: flex; overflow-x: auto; padding-block: .25rem; }
+  .menu-negocio button { flex: none; white-space: nowrap; }
+}
+.conceptos-adicionales { padding: .75rem; }
+.conceptos-adicionales > .partida-adicional { margin-block: 0 .75rem; }
+.partida-adicional p { margin-block: .5rem; }

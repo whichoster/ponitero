@@ -10,6 +10,7 @@ import postgres from 'postgres';
 import { z } from 'zod';
 import { apertura, acuerdosDeApertura, crearViaje, vehiculo, verificarPlacas } from './apertura';
 import { expediente, operacion, registrarOperacion } from './operacion';
+import { cobro, estadoCobranza, registrarCobro } from './cobranza';
 
 function env(name: string) {
   const value = process.env[name];
@@ -86,8 +87,8 @@ async function access(sql: Query, businessId: string, userId: string, write: boo
 }
 
 function gastosVisibles(gastos: postgres.Row[]) {
-  return gastos.map(({ id, concepto, fecha, beneficiario, importe, estado }) =>
-    ({ id, concepto, fecha, beneficiario, importe, estado }));
+  return gastos.map(({ id, concepto, fecha, beneficiario, importe, estado, cantidad, tarifa_unitaria }) =>
+    ({ id, concepto, fecha, beneficiario, importe, estado, cantidad, tarifa_unitaria }));
 }
 
 function conflict(error: unknown): never {
@@ -221,6 +222,32 @@ class CampoController {
       await audit(sql, businessId, user.id, 'estado_negocio', { previous: current.status, status, reason });
       return updated;
     });
+  }
+
+  @Get('businesses/:id/cobranza')
+  @ApiBearerAuth()
+  async cobrarEstado(@Headers('authorization') header: string, @Param('id') id: string) {
+    const user = await actor(header);
+    const negocio = parse(uuid, id);
+    return db.begin('isolation level repeatable read', async sql => {
+      await access(sql, negocio, user.id, true);
+      return estadoCobranza(sql, negocio);
+    });
+  }
+
+  @Post('businesses/:id/cobranza')
+  @ApiBearerAuth()
+  @input(cobro)
+  async cobrarRegistro(@Headers('authorization') header: string, @Param('id') id: string, @Body() body: unknown) {
+    const user = await actor(header);
+    const negocio = parse(uuid, id);
+    const datos = parse(cobro, body);
+    return db.begin(async sql => {
+      await access(sql, negocio, user.id, true, true);
+      const resultado = await registrarCobro(sql, negocio, datos);
+      await audit(sql, negocio, user.id, 'cobranza_' + datos.accion, { datos, resultado });
+      return resultado;
+    }).catch(conflict);
   }
 
   @Get('businesses/:id/export')

@@ -92,6 +92,16 @@ export default function Panel() {
     });
   }
 
+  async function exportarNegocio() {
+    const contenido = await request<object>(base + '/export', token);
+    const url = URL.createObjectURL(new Blob([JSON.stringify(contenido, null, 2)], { type: 'application/json' }));
+    const enlace = document.createElement('a');
+    enlace.href = url;
+    enlace.download = 'ponitero-viajes-' + business?.id + '.json';
+    enlace.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   async function select(item: Business) {
     const contenido = item.canOpen ? await request<Details>('/businesses/' + item.id, token) : null;
     if (item.id !== business?.id) {
@@ -292,6 +302,7 @@ export default function Panel() {
               setCaptura(null); setApartado(null); setViaje(null); setViajeSeleccionado('');
               router.push('/negocios/' + business.id + '/empleados');
             }}>Empleados</button>
+            <button type="button" disabled={busy} onClick={() => void run(exportarNegocio)}>Exportar viajes</button>
           </div>}
           {vistaPorApartado && apartado && <p><Volver etiqueta="Volver al menú del negocio" disabled={busy}
             onClick={() => cambiarApartado(null)} /></p>}

@@ -223,6 +223,24 @@ class CampoController {
     });
   }
 
+  @Get('businesses/:id/export')
+  @ApiBearerAuth()
+  async exportBusiness(@Headers('authorization') header: string, @Param('id') id: string) {
+    const user = await actor(header);
+    const businessId = parse(uuid, id);
+    return db.begin('isolation level repeatable read', async sql => {
+      await access(sql, businessId, user.id, true);
+      const [negocio] = await sql`select id,name,status from campo.businesses where id=${businessId}`;
+      const viajes = await sql`select id,reference,customer,apertura,acuerdos,created_at,
+        cerrado_en,reasignado_en from campo.trips where business_id=${businessId} order by created_at,id`;
+      const expedientes = [];
+      for (const viaje of viajes) {
+        expedientes.push({ viaje, expediente: await expediente(sql, viaje.id, false) });
+      }
+      return { version: 1, negocio, exportado_en: new Date().toISOString(), viajes: expedientes };
+    });
+  }
+
   @Get('businesses/:id')
   @ApiBearerAuth()
   async details(@Headers('authorization') header: string, @Param('id') id: string) {
@@ -556,7 +574,7 @@ class CampoController {
         join campo.trips t on t.business_id=r.business_id and t.id=r.source_trip_id
         where r.id=${requestId} and r.business_id=${negocio} and (${role !== 'encargado'} or r.requester_id=${user.id})`;
       if (!source) throw new NotFoundException('El viaje de origen no está disponible.');
-      const data = await expediente(sql, source.id);
+      const data = await expediente(sql, source.id, false);
       return { reference: source.reference,
         compras: data.compras.map(({ folio, finca, kg }) => ({ folio, finca, kg })),
         ticket: data.ticketFabrica, entrega: data.entrega,
@@ -583,6 +601,7 @@ class CampoController {
       const beneficiario = role === 'encargado' ? user.email ?? '' : asignado?.email ?? '';
       return role === 'encargado' ? {
         beneficiario,
+        sugerencias: result.sugerencias,
         gastos: gastosVisibles(result.gastos),
         resumen: { folio_compra: result.resumen.folio_compra, kg_pendientes: result.resumen.kg_pendientes,
           kg_comprados: result.resumen.kg_comprados, acuerdos: Boolean(result.resumen.acuerdos), cerrado_en: result.resumen.cerrado_en, reasignado_en: result.resumen.reasignado_en },

@@ -40,7 +40,9 @@ Entra como administrador, registra un viaje con sus acuerdos de apertura y abre 
 
 Los importes se registran en MXN. Las tarifas se capturan por tonelada métrica y los pesos en kg. PostgreSQL calcula los importes con valores decimales y redondea los cargos a centavos. La distribución sugerida de la reserva usa la primera estimación y los kilos comprados a cada productor. La captura de tickets conserva la reserva pactada correspondiente a cada compra.
 
-Quedan pendientes los catálogos y tarifas sugeridas de gasto, los archivos de evidencia, la renegociación y cancelación con traslados, la facturación agrupada, la conciliación, los adelantos del cliente y el expediente fiscal.
+En **Planear la compra** puedes comparar ofertas por utilidad y margen estimados después de la reserva. En el expediente, Administración puede configurar tarifas sugeridas de gasto por viaje, finca o productor. Desde el menú del negocio, **Exportar viajes** descarga sus expedientes en JSON.
+
+Consulta los apartados pendientes en el [estado de implementación](docs/estado-implementacion.md).
 
 ## Documentación
 

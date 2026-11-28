@@ -11,6 +11,8 @@ const dinero = decimal(2);
 const peso = decimal(3).refine(value => Number(value) > 0);
 const tarifa = decimal(4);
 
+const conceptosTicket = ['corte','estiba','flete local','vaciado','pasaje'] as const;
+
 const gasto = z.object({
   ticket: z.uuid().optional(), concepto: texto, fecha: z.iso.date(),
   beneficiario: z.string().trim().min(1).max(254), tarifa: tarifa.optional(), importe: dinero,
@@ -22,14 +24,24 @@ const datosTicket = z.object({
   descripcion: texto.optional(), kg: peso,
 });
 
+const escenarioCompra = z.object({
+  kg: peso, merma: decimal(4).refine(value => Number(value) <= 100),
+  gastos: dinero,
+  partidas: z.array(z.object({ productor: texto, kg: peso, tarifa, gastos: dinero })).max(100),
+});
+
 export const operacion = z.discriminatedUnion('accion', [
   z.object({ accion: z.literal('acuerdos'), fecha: z.iso.date(), producto: texto,
     chofer: texto, vehiculo: texto, placas: texto, venta: tarifa, fleteChofer: tarifa, fleteCliente: tarifa }),
   z.object({ accion: z.literal('plan'), kg: peso, merma: decimal(4).refine(x => Number(x) <= 100), gastos: dinero, oferta: tarifa.optional() }),
+  escenarioCompra.extend({ accion: z.literal('simularCompra') }),
+  escenarioCompra.extend({ accion: z.literal('guardarEscenario') }),
   datosTicket.extend({ accion: z.literal('compra'), productor: texto, tarifa, reserva: dinero }),
   datosTicket.extend({ accion: z.literal('corregirCompra'), ticket: z.uuid(),
     version: z.number().int().positive(), motivo: texto }),
   gasto.extend({ accion: z.literal('gasto') }),
+  z.object({ accion: z.literal('tarifaGasto'), ambito: z.enum(['viaje','finca','productor']),
+    referencia: texto.optional(), concepto: z.enum(conceptosTicket), tarifa, motivo: texto }),
   z.object({
     accion: z.literal('gastos'),
     ...gasto.pick({ fecha: true, beneficiario: true, origen: true, motivo: true }).shape,
@@ -52,10 +64,10 @@ export const operacion = z.discriminatedUnion('accion', [
   z.object({ accion: z.literal('cierre'), motivo: texto }),
 ]);
 
-export async function expediente(sql: Sql, viaje: string) {
+export async function expediente(sql: Sql, viaje: string, incluirTarifas = true) {
   const [resumen] = await sql`
     with base as (
-      select t.customer, t.acuerdos, nullif(t.apertura->>'kg','') kg_previstos,
+      select t.customer, t.acuerdos, nullif(t.apertura->>'kg','') kg_previstos, t.acuerdos->>'fecha' fecha_viaje,
         'C-' || case when t.consecutivo_compra<10 then '0' else '' end || t.consecutivo_compra folio_compra, t.cerrado_en, t.reasignado_en, f.kg kg_ticket, r.kg_correo, r.venta,
         coalesce(c.kg,0) kg_comprados, coalesce(c.importe,0) costo_compra,
         coalesce(g.total,0) gastos_aprobados, coalesce(g.pendientes,0) gastos_pendientes,
@@ -98,9 +110,9 @@ export async function expediente(sql: Sql, viaje: string) {
       from previsiones
     ), topes as (
       select *, (venta+flete_cliente)*0.70-flete_chofer-gastos tope,
-        round(venta*0.0125,2) reserva from importes
+        coalesce((escenario->'resultado'->>'reserva')::numeric,round(venta*0.0125,2)) reserva from importes
     )
-    select id, creado_en, kg, merma, gastos, oferta,
+    select id, creado_en, kg, merma, gastos, oferta, escenario,
       round(venta+flete_cliente-flete_chofer-gastos-oferta*kg/1000,2) resultado_simulado,
       round(100*(venta+flete_cliente-flete_chofer-gastos-oferta*kg/1000)/nullif(venta+flete_cliente,0),2) margen_simulado,
       round(kg_recibidos,3) kg_recibidos,
@@ -124,7 +136,23 @@ export async function expediente(sql: Sql, viaje: string) {
   const [recepcion] = await sql`select *, fecha::text as fecha_capturada from campo.recepciones where viaje=${viaje}`;
   const [entrega] = await sql`select viaje,negocio,folio,fecha::text,kg from campo.remisiones_entrega where viaje=${viaje}`;
   const [ticketFabrica] = await sql`select viaje,folio,fecha::text,kg from campo.tickets_fabrica where viaje=${viaje}`;
-  return { resumen, planes, compras, remisiones, gastos, abonos, recepcion, entrega, ticketFabrica };
+  const tarifas = incluirTarifas ? await sql`
+    select r.ambito,r.referencia,r.concepto,r.tarifa from campo.tarifas_gasto r
+    join campo.trips t on t.id=${viaje} and t.business_id=r.negocio
+    where (r.ambito='viaje' and r.referencia=t.id::text)
+      or r.ambito in ('finca','productor')
+    order by r.ambito,r.referencia,r.concepto` : [];
+  const sugerencias = incluirTarifas ? await sql`
+    select distinct on (c.id,r.concepto) c.id ticket,r.concepto,r.tarifa,
+      round(c.kg*r.tarifa/1000,2) importe
+    from campo.compras c join campo.trips t on t.id=c.viaje
+    join campo.tarifas_gasto r on r.negocio=t.business_id
+      and ((r.ambito='viaje' and r.referencia=t.id::text)
+        or (r.ambito='finca' and r.referencia=c.finca)
+        or (r.ambito='productor' and r.referencia=c.productor))
+    where c.viaje=${viaje}
+    order by c.id,r.concepto,case r.ambito when 'viaje' then 1 when 'finca' then 2 else 3 end` : [];
+  return { resumen, planes, compras, remisiones, gastos, abonos, recepcion, entrega, ticketFabrica, tarifas, sugerencias };
 }
 
 export async function registrarOperacion(
@@ -151,6 +179,43 @@ export async function registrarOperacion(
       await sql`insert into campo.planes(viaje,kg,merma,gastos,oferta)
         values(${viaje},${datos.kg},${datos.merma},${datos.gastos},${datos.oferta ?? null})`;
       break;
+    case 'simularCompra':
+    case 'guardarEscenario': {
+      const [resultado] = await sql`
+        with partidas as (
+          select coalesce(sum(kg),0) kg,coalesce(sum(round(kg*tarifa/1000,2)),0) costo,coalesce(sum(gastos),0) gastos
+          from jsonb_to_recordset(${sql.json(datos.partidas)}::jsonb) as p(kg numeric,tarifa numeric,gastos numeric)
+        ), registradas as (
+          select coalesce(sum(kg),0) kg,coalesce(sum(importe),0) costo from campo.compras where viaje=${viaje}
+        ), carga as (
+          select ${datos.kg}::numeric objetivo,registradas.kg comprometidos,partidas.kg propuestos,
+            registradas.costo costo_comprometido,partidas.costo costo_propuesto,
+            ${datos.gastos}::numeric+partidas.gastos otros_gastos,
+            (registradas.kg+partidas.kg)*(1-${datos.merma}::numeric/100) kg_recibidos
+          from partidas cross join registradas
+        ), ingresos as (
+          select *,round(kg_recibidos*(${actual.acuerdos.venta}::numeric)/1000,2) venta,
+            round(kg_recibidos*(${actual.acuerdos.fleteCliente}::numeric)/1000,2) flete_cliente,
+            round(kg_recibidos*(${actual.acuerdos.fleteChofer}::numeric)/1000,2) flete_chofer
+          from carga
+        ), costos as (
+          select *,round(venta*0.0125,2) reserva,
+            costo_comprometido+costo_propuesto+otros_gastos+flete_chofer costo_total
+          from ingresos
+        )
+        select *, greatest(0,objetivo-comprometidos-propuestos) kg_pendientes,
+          venta+flete_cliente-costo_total-reserva utilidad,
+          round(100*(venta+flete_cliente-costo_total-reserva)/nullif(venta+flete_cliente,0),2) margen,
+          (comprometidos+propuestos=objetivo) carga_completa
+        from costos`;
+      if (datos.accion === 'simularCompra') return { resultado, existente: true };
+      if (!resultado.carga_completa) throw new BadRequestException('Las compras registradas y propuestas deben completar la carga prevista.');
+      const escenario = { partidas: datos.partidas, resultado };
+      const [nuevo] = await sql`insert into campo.planes(viaje,kg,merma,gastos,escenario)
+        values (${viaje},${datos.kg},${datos.merma},${datos.gastos},${sql.json(escenario as unknown as postgres.JSONValue)})
+        returning id`;
+      return { resultado, nuevo };
+    }
     case 'compra':
     case 'corregirCompra': {
       if (datos.variedad === 'Otra' && !datos.descripcion) throw new BadRequestException('Describe la variedad.');
@@ -175,6 +240,19 @@ export async function registrarOperacion(
       }
       return { previo, nuevo };
     }
+    case 'tarifaGasto': {
+      const referencia = datos.ambito === 'viaje' ? viaje : datos.referencia;
+      if (!referencia) throw new BadRequestException('Indica la finca o el productor.');
+      await sql`select pg_advisory_xact_lock(hashtextextended(
+        concat_ws('|',${negocio}::text,${datos.ambito}::text,${referencia}::text,${datos.concepto}::text),0))`;
+      const [previo] = await sql`select tarifa from campo.tarifas_gasto where negocio=${negocio}
+        and ambito=${datos.ambito} and referencia=${referencia} and concepto=${datos.concepto}`;
+      const [nuevo] = await sql`insert into campo.tarifas_gasto(negocio,ambito,referencia,concepto,tarifa)
+        values (${negocio},${datos.ambito},${referencia},${datos.concepto},${datos.tarifa})
+        on conflict (negocio,ambito,referencia,concepto) do update set tarifa=excluded.tarifa
+        returning ambito,referencia,concepto,tarifa`;
+      return { previo: previo ?? null,nuevo };
+    }
     case 'gasto':
     case 'gastos': {
       if (actual.cerrado_en && (!datos.motivo || rol === 'encargado')) {
@@ -188,7 +266,7 @@ export async function registrarOperacion(
         const concepto = partida.concepto.toLocaleLowerCase('es-MX');
         if (concepto === 'combustible del camión') throw new BadRequestException('Registra ese pago como abono al flete.');
         if (partida.ticket) {
-          if (!partida.tarifa || !['corte','estiba','flete local','vaciado','pasaje'].includes(concepto)) {
+          if (!partida.tarifa || !conceptosTicket.some(permitido => permitido === concepto)) {
             throw new BadRequestException('Verifica el concepto y la tarifa por tonelada.');
           }
           const [ticket] = await sql`select round(kg*${partida.tarifa}::numeric/1000,2)=${partida.importe}::numeric coincide

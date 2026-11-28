@@ -8,13 +8,16 @@
 - El panel del administrador muestra un apartado y un viaje a la vez. La página **Empleados** pagina de 20 en 20 y ofrece alta, edición de permisos y bajas individuales o múltiples según el rol.
 - Administración puede editar una solicitud antes de aprobarla o devolverla, y cancelarla con motivo. Desde el cierre puede reasignar un viaje y generar una solicitud editable que conserva el vínculo con el expediente original de solo lectura.
 - Asignación de vehículo por administración o por un encargado del viaje. Las placas identifican al vehículo y se pueden reutilizar cuando termina el viaje anterior. El panel tiene **Solicitar viaje** en el encabezado y flechas de regreso.
-- Acuerdos por viaje, estimaciones de merma, simulación de ofertas y tope de compra con reserva comercial. El historial muestra el tope conservador total y por tonelada de cada estimación. La sugerencia de reparto usa los kilos por productor y la primera estimación. La reserva pactada se captura por ticket.
+- **Planear la compra** compara ofertas de uno o varios productores por utilidad y margen después de la reserva del 1.25%. Precarga la carga y la merma sugerida para mayo o diciembre, incorpora el costo y peso de los tickets guardados y conserva versiones al guardar. La primera estimación sigue siendo la base de la reserva sugerida por productor.
 - **Modificar estimación** precarga la última versión y conserva las anteriores. El expediente reúne las capturas del viaje y aplica los permisos de consulta por rol.
 - Tickets de finca, remisiones agrupadas por productor, remisión de entrega y cotejo del ticket de fábrica con el correo de recepción.
 - **Comprar a productores** agrupa los tickets por productor y muestra el folio base y los kilos comprados y pendientes. Las remisiones de compra usan el consecutivo `C-n` por negocio con un sufijo fijo por productor. Administración puede corregir el ticket de un viaje abierto con motivo e historial. Los gastos vinculados a un peso corregido quedan señalados para revisión. El encargado puede iniciar un gasto desde un ticket de su viaje asignado.
 - La remisión de entrega se habilita con el ticket de fábrica completo. Precarga los datos del viaje y asigna un folio consecutivo `F-n` por negocio al emitir. La migración conserva las remisiones históricas.
 - Captura y aprobación de gastos, abonos al chofer, cierre operativo y cálculo de costo, merma y rentabilidad.
 - Captura de gastos generales con importes independientes, un concepto opcional y beneficiario editable precargado con el correo del encargado asignado.
+
+- Catálogo de tarifas de gasto por viaje, finca o productor. En un ticket, la API sugiere la tarifa por concepto y calcula el importe con el peso vigente.
+- **Exportar viajes** descarga un archivo JSON con los viajes y expedientes del negocio para administración.
 
 ## Verificación
 
@@ -28,12 +31,14 @@ Con cuentas de demostración y datos sintéticos se verificaron la paginación c
 
 En Supabase local se aplicó la migración de folios de compra. Con las cuentas de demostración se verificaron dos aperturas simultáneas con folios consecutivos, compras simultáneas agrupadas por productor, corrección sin duplicar el ticket y señalamiento del gasto vinculado. La API rechazó la corrección de un encargado, la consulta de otro negocio, la consulta sin asignación, el folio duplicado y la corrección con una versión anterior.
 
+En Supabase local se verificó que las dos opciones de diciembre dejan $15,104.62 y 11.14%, que la simulación usa compras comprometidas y que las versiones guardadas conservan sus resultados. Las cuentas de demostración comprobaron la exportación administrativa, la exclusión de otras cuentas y la prioridad de tarifas viaje, finca y productor. Un encargado asignado pudo usar la sugerencia en un gasto, con acceso restringido a la configuración.
+
 La migración conserva las coincidencias de nombre históricas y habilita la gestión de encargados para administradores existentes. Las cuentas administrativas nuevas requieren el permiso del superadministrador. Los viajes anteriores con acuerdos conservan el acceso a su expediente. Los viajes anteriores sin acuerdos requieren completar la apertura.
 
 ## Pendiente
 
-- Exportación de datos y reportes por negocio.
-- Catálogos y tarifas sugeridas, evidencias adjuntas y cancelación con traslado de gastos o adelantos.
+- Reportes por negocio y exportación de datos fuera del expediente de viaje.
+- Catálogos generales, evidencias adjuntas y cancelación con traslado de gastos o adelantos.
 - Facturas agrupadas, cobros diferenciados de producto y flete, depósitos y adelantos del cliente.
 - Expediente fiscal, custodia de XML y conciliación contable.
 

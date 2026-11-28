@@ -9,10 +9,12 @@ type Fila = Record<string, string | null>;
 type Expediente = {
   resumen: Omit<Fila, 'acuerdos'> & { acuerdos?: boolean | { producto: string; venta: string } };
   beneficiario: string;
-  planes?: Fila[];
+  planes?: (Fila & { escenario?: EscenarioGuardado })[];
   compras: (Fila & { version?: number })[];
   remisiones?: Fila[];
   gastos?: Fila[];
+  tarifas?: Fila[];
+  sugerencias?: Fila[];
   abonos?: Fila[];
   recepcion?: Fila;
   entrega?: Fila;
@@ -21,6 +23,7 @@ type Expediente = {
 type Campo = [nombre: string, etiqueta: string, tipo?: 'fecha' | 'decimal' | 'opcional' | string[]];
 const fecha: Campo = ['fecha', 'Fecha', 'fecha'];
 const motivo: Campo = ['motivo', 'Motivo'];
+const conceptosTicket = ['corte','estiba','flete local','vaciado','pasaje'];
 const importe: Campo = ['importe', 'Importe en MXN', 'decimal'];
 const gastosFijos = ['Corte', 'Estiba', 'Canastos', 'Escalera'];
 const gastosOpcionales = [
@@ -43,9 +46,9 @@ function valoresTicket(ticket: Fila) {
   return variedades.includes(variedad) ? ticket : { ...ticket, variedad: 'Otra', descripcion: variedad };
 }
 
-function Formulario({ titulo, accion, campos, enviar, inicial, tickets, beneficiario, valoresIniciales, children, etiquetaGuardar = 'Guardar' }: {
+function Formulario({ titulo, accion, campos, enviar, inicial, tickets, beneficiario, valoresIniciales, children, alCambiar, etiquetaGuardar = 'Guardar' }: {
   titulo: string; accion: string; campos: Campo[];
-  enviar: (datos: object) => Promise<boolean>; inicial?: object; tickets?: Fila[]; beneficiario?: string; valoresIniciales?: Fila; children?: ReactNode; etiquetaGuardar?: string;
+  enviar: (datos: object) => Promise<boolean>; inicial?: object; tickets?: Fila[]; beneficiario?: string; valoresIniciales?: Fila; children?: ReactNode; alCambiar?: (campo: HTMLSelectElement) => void; etiquetaGuardar?: string;
 }) {
   const [guardando, setGuardando] = useState(false);
   const [conceptoOpcional, setConceptoOpcional] = useState('');
@@ -79,7 +82,7 @@ function Formulario({ titulo, accion, campos, enviar, inicial, tickets, benefici
     <form className="captura" onSubmit={guardar}>
       {children}
       {campos.map(([nombre, etiqueta, tipo]) => <label key={nombre}>{etiqueta}
-        {Array.isArray(tipo) ? <select name={nombre} defaultValue={valoresIniciales?.[nombre] ?? undefined} required>
+        {Array.isArray(tipo) ? <select name={nombre} defaultValue={valoresIniciales?.[nombre] ?? undefined} onChange={event => alCambiar?.(event.currentTarget)} required>
           {tipo.map(opcion => <option key={opcion}>{opcion}</option>)}
         </select> : <input name={nombre} defaultValue={nombre === 'beneficiario' ? beneficiario : valoresIniciales?.[nombre] ?? undefined} required={tipo !== 'opcional'}
           type={tipo === 'fecha' ? 'date' : 'text'}
@@ -100,7 +103,7 @@ function Formulario({ titulo, accion, campos, enviar, inicial, tickets, benefici
           </label>}
         </div>
       </fieldset>}
-      {tickets && <label>Ticket de finca<select name="ticket" defaultValue={valoresIniciales?.ticket ?? undefined} required>
+      {tickets && <label>Ticket de finca<select name="ticket" defaultValue={valoresIniciales?.ticket ?? undefined} onChange={event => alCambiar?.(event.currentTarget)} required>
         <option value="">Selecciona un ticket</option>
         {tickets.map(ticket => <option key={ticket.id} value={ticket.id ?? ''}>
           {ticket.folio} · {ticket.finca} · {ticket.kg} kg
@@ -118,6 +121,88 @@ function Formulario({ titulo, accion, campos, enviar, inicial, tickets, benefici
         <button disabled={guardando}>{guardando ? 'Guardando…' : etiquetaGuardar}</button>
       </div>
     </form>
+  </details>;
+}
+
+type PartidaCompra = { productor: string; kg: string; tarifa: string; gastos: string };
+type EscenarioGuardado = { partidas: PartidaCompra[]; resultado: Fila };
+
+function ResultadoCompra({ resultado }: { resultado: Fila }) {
+  return <span>{resultado.kg_recibidos} kg en fábrica · Costo {pesos.format(Number(resultado.costo_total))}
+    {' · '}Reserva {pesos.format(Number(resultado.reserva))} · Utilidad {pesos.format(Number(resultado.utilidad))}
+    {' · '}Margen {resultado.margen == null ? 'pendiente' : resultado.margen + ' %'}
+    {resultado.carga_completa !== 'true' && Number(resultado.kg_pendientes) > 0 && <> · {resultado.kg_pendientes} kg pendientes</>}
+  </span>;
+}
+
+function PlanCompra({ resumen, plan, registrar, guardar }: {
+  resumen: Expediente['resumen'];
+  plan?: NonNullable<Expediente['planes']>[number];
+  registrar: (datos: object) => Promise<unknown>;
+  guardar: (datos: object) => Promise<boolean>;
+}) {
+  const [filas, setFilas] = useState(() => (plan?.escenario?.partidas ?? []).map((partida, id) => ({ id, partida })));
+  const [siguiente, setSiguiente] = useState(filas.length);
+  const [resultados, setResultados] = useState<{ proveedores: string; resultado: Fila }[]>([]);
+  const [error, setError] = useState('');
+  const [ocupado, setOcupado] = useState(false);
+  const mes = resumen.fecha_viaje?.slice(5, 7);
+  const merma = mes === '12' ? '1' : mes === '05' ? '3.75' : '';
+  async function calcular(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const datos = new FormData(form);
+    const valor = (nombre: string) => String(datos.get(nombre) ?? '');
+    const partidas = filas.map(({ id }) => ({
+      productor: valor('productor-' + id), kg: valor('kg-' + id),
+      tarifa: valor('tarifa-' + id), gastos: valor('gastos-' + id),
+    }));
+    const captura = { kg: valor('kg'), merma: valor('merma'), gastos: valor('gastos'), partidas };
+    setError('');
+    setOcupado(true);
+    try {
+      const boton = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
+      if (boton?.value === 'guardar') {
+        if (await guardar({ accion: 'guardarEscenario', ...captura })) delete form.dataset.dirty;
+      } else {
+        const { resultado } = await registrar({ accion: 'simularCompra', ...captura }) as { resultado: Fila };
+        setResultados(previos => [...previos, { proveedores: partidas.map(p => p.productor).join(', '), resultado }]);
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo simular la compra.');
+    } finally {
+      setOcupado(false);
+    }
+  }
+  return <details className="accion"><summary>Planear la compra</summary>
+    <p>{resumen.kg_comprados} kg comprados · {resumen.kg_pendientes ?? '—'} kg pendientes según la apertura</p>
+    <form className="captura" onSubmit={calcular}>
+      <label>Carga prevista en kg<input name="kg" defaultValue={plan?.kg ?? resumen.kg_previstos ?? ''} required inputMode="decimal" /></label>
+      <label>Merma estimada (%)<input name="merma" defaultValue={plan?.merma ?? merma} required inputMode="decimal" /></label>
+      <label>Gastos comunes (MXN)<input name="gastos" defaultValue={plan?.gastos ?? '0'} required inputMode="decimal" /></label>
+      {filas.map(({ id, partida }) => <fieldset className="ancho-completo" key={id}>
+        <legend>Oferta de compra</legend>
+        <div className="captura">
+          <label>Productor<input name={'productor-' + id} defaultValue={partida.productor} required /></label>
+          <label>Kilos propuestos<input name={'kg-' + id} defaultValue={partida.kg} required inputMode="decimal" /></label>
+          <label>Precio por tonelada<input name={'tarifa-' + id} defaultValue={partida.tarifa} required inputMode="decimal" /></label>
+          <label>Gastos de la oferta (MXN)<input name={'gastos-' + id} defaultValue={partida.gastos} required inputMode="decimal" /></label>
+          <button type="button" onClick={() => setFilas(previas => previas.filter(fila => fila.id !== id))}>Quitar oferta</button>
+        </div>
+      </fieldset>)}
+      <div className="acciones">
+        <button type="button" onClick={() => {
+          setFilas(previas => [...previas, { id: siguiente, partida: { productor: '', kg: '', tarifa: '', gastos: '0' } }]);
+          setSiguiente(siguiente + 1);
+        }}>Agregar oferta</button>
+        <button disabled={ocupado}>Simular</button>
+        <button disabled={ocupado} value="guardar">Guardar estimación</button>
+      </div>
+    </form>
+    {error && <p role="alert">{error}</p>}
+    {resultados.length > 0 && <ol>{resultados.map(({ proveedores, resultado }, indice) => <li key={indice}>
+      {proveedores || 'Compras registradas'} · <ResultadoCompra resultado={resultado} />
+    </li>)}</ol>}
   </details>;
 }
 
@@ -156,19 +241,40 @@ export function Operacion({ cargar, registrar, administra, encargados, asignado,
   const resumen = datos?.resumen;
   const cerrado = Boolean(resumen?.cerrado_en);
   const reasignado = Boolean(resumen?.reasignado_en);
-  const plan = datos?.planes?.at(-1);
   const camposGasto: Campo[] = [
     fecha, ['beneficiario','Beneficiario'],
     ['origen','Origen',administra ? ['directo','mensaje','llamada'] : ['directo']],
     cerrado ? motivo : ['motivo','Motivo de ajuste','opcional'],
   ];
 
-  const camposGastoTicket: Campo[] = [...camposGasto, ['concepto','Concepto',['corte','estiba','flete local','vaciado','pasaje']],
+  const camposGastoTicket: Campo[] = [...camposGasto, ['concepto','Concepto',conceptosTicket],
     importe, ['tarifa','Tarifa por tonelada','decimal']];
+  function sugerirTarifa(ticket: string | null, concepto: string, form: HTMLFormElement | null) {
+    const sugerencia = datos?.sugerencias?.find(item => item.ticket === ticket && item.concepto === concepto);
+    if (!form) return;
+    const campoTarifa = form.elements.namedItem('tarifa') as HTMLInputElement;
+    const campoImporte = form.elements.namedItem('importe') as HTMLInputElement;
+    campoTarifa.value = sugerencia?.tarifa ?? '';
+    campoImporte.value = sugerencia?.importe ?? '';
+  }
+
   function capturaGastoTicket(ticket: Fila) {
     if (!datos || reasignado || (cerrado && !administra)) return null;
     return <Formulario titulo="Registrar gasto" accion="gasto" enviar={enviar}
-      beneficiario={datos.beneficiario} inicial={{ ticket: ticket.id }} campos={camposGastoTicket} />;
+      beneficiario={datos.beneficiario} inicial={{ ticket: ticket.id }} campos={camposGastoTicket}
+      alCambiar={(campo) => {
+        if (campo.name === 'concepto') sugerirTarifa(ticket.id, campo.value, campo.form);
+      }}>
+      <p>Peso del ticket {ticket.kg} kg</p>
+      {datos.sugerencias?.filter(item => item.ticket === ticket.id).map(item => <button
+        type="button" className="secondary" key={item.concepto} onClick={event => {
+          const form = event.currentTarget.form;
+          const concepto = form?.elements.namedItem('concepto') as HTMLSelectElement | null;
+          if (concepto && item.concepto) concepto.value = item.concepto;
+          sugerirTarifa(ticket.id, item.concepto ?? '', form);
+          if (form) form.dataset.dirty = 'true';
+        }}>{item.concepto} · {pesos.format(Number(item.tarifa))}/t</button>)}
+    </Formulario>;
   }
 
   return <section className="operacion">
@@ -179,8 +285,6 @@ export function Operacion({ cargar, registrar, administra, encargados, asignado,
       {administra && resumen.acuerdos && <>
         <dl className="indicadores">
           {([
-            ['Tope conservador por tonelada', plan?.tope_por_tonelada],
-            ['Tope conservador total', plan?.tope_conservador],
             ['Costo operativo', resumen.costo],
             ['Resultado de producto', resumen.resultado_producto],
             ['Resultado con flete', resumen.resultado_total],
@@ -190,7 +294,6 @@ export function Operacion({ cargar, registrar, administra, encargados, asignado,
             <dt>{etiqueta}</dt><dd>{valor == null ? 'Pendiente' : pesos.format(Number(valor))}</dd>
           </div>)}
         </dl>
-        {Number(plan?.tope_conservador) < 0 && <p>La meta del 30 % es inviable con este escenario.</p>}
         {resumen.kg_ticket && <p>Merma real {resumen.merma_kg} kg ({resumen.merma_pct ?? '—'} %).
           {Number(resumen.merma_kg) < 0 && ' Revisa el peso recibido.'}
           {resumen.kg_correo == null && ' Falta el correo de recepción.'}
@@ -198,11 +301,8 @@ export function Operacion({ cargar, registrar, administra, encargados, asignado,
         <p>Margen de producto {resumen.margen_producto ?? '—'} % · Margen con flete {resumen.margen_total ?? '—'} %</p>
         {!!datos.planes?.length && <details><summary>Historial de estimaciones</summary><ul>
           {datos.planes.map(escenario => <li key={escenario.id}>
-            {escenario.kg} kg · {escenario.merma} % de merma · Tope comercial {pesos.format(Number(escenario.tope_comercial))}
-            {' · '}Reserva {pesos.format(Number(escenario.reserva))} · Tope conservador total {pesos.format(Number(escenario.tope_conservador))}
-            {' · '}<strong>Tope conservador por tonelada {pesos.format(Number(escenario.tope_por_tonelada))}/t</strong>
-            {escenario.oferta != null && <> · Oferta {pesos.format(Number(escenario.oferta))}/t · Resultado simulado{' '}
-              {pesos.format(Number(escenario.resultado_simulado))}{escenario.margen_simulado != null && ' (' + escenario.margen_simulado + ' %)'}</>}
+            {escenario.kg} kg · {escenario.merma} % de merma · Reserva {pesos.format(Number(escenario.reserva))}
+            {escenario.escenario && <> · <ResultadoCompra resultado={escenario.escenario.resultado} /></>}
           </li>)}
         </ul></details>}
         {datos.entrega && typeof resumen.acuerdos === 'object' && resumen.acuerdos && <details>
@@ -253,9 +353,8 @@ export function Operacion({ cargar, registrar, administra, encargados, asignado,
         </details>)}
       </section>}
       {administra && resumen.acuerdos && !cerrado && !reasignado && <>
-        <Formulario key={plan?.id ?? 'primera-estimacion'} titulo={plan ? 'Modificar estimación' : 'Guardar estimación'}
-          etiquetaGuardar="Guardar estimación" accion="plan" enviar={enviar} valoresIniciales={plan}
-          campos={ [['kg','Compra prevista en kg','decimal'], ['merma','Merma estimada (%)','decimal'], ['gastos','Otros gastos previstos (MXN)','decimal'], ['oferta','Oferta a simular por tonelada','opcional']] } />
+        <PlanCompra key={datos.planes?.at(-1)?.id ?? 'inicial'} resumen={resumen} plan={datos.planes?.at(-1)}
+          registrar={registrar} guardar={enviar} />
         <Formulario key={datos.ticketFabrica ? 'corregir-ticket' : 'registrar-ticket'}
           titulo={datos.ticketFabrica ? 'Corregir ticket de fábrica' : 'Registrar ticket de fábrica'}
           accion="ticketFabrica" enviar={enviar} valoresIniciales={datos.ticketFabrica} campos={[fecha,
@@ -307,11 +406,24 @@ export function Operacion({ cargar, registrar, administra, encargados, asignado,
         </details>
       </>}
       {resumen.acuerdos && !reasignado && (administra || !cerrado) && <>
+        {administra && !cerrado && <details><summary>Tarifas sugeridas por ticket</summary>
+          <ul>{datos.tarifas?.map(tarifa => <li key={[tarifa.ambito, tarifa.referencia, tarifa.concepto].join(':')}>
+            {tarifa.ambito === 'viaje' ? 'Este viaje' : tarifa.referencia} · {tarifa.concepto} · {pesos.format(Number(tarifa.tarifa))}/t
+          </li>)}</ul>
+          <Formulario titulo="Configurar tarifa" accion="tarifaGasto" enviar={enviar}
+            campos={ [['ambito','Aplicar por',['viaje','finca','productor']],
+              ['referencia','Nombre de la finca o productor','opcional'], ['concepto','Concepto',conceptosTicket],
+              ['tarifa','Tarifa por tonelada','decimal'], motivo] } />
+        </details>}
         <Formulario titulo="Capturar gasto" accion="gastos" enviar={enviar}
           beneficiario={datos.beneficiario} campos={camposGasto} />
         {datos.compras.length > 0 && <Formulario titulo="Capturar gasto por ticket de finca" accion="gasto" enviar={enviar}
           beneficiario={datos.beneficiario} tickets={datos.compras}
-          campos={camposGastoTicket} />}
+          campos={camposGastoTicket} alCambiar={campo => {
+            if (!['ticket', 'concepto'].includes(campo.name) || !campo.form) return;
+            const seleccion = new FormData(campo.form);
+            sugerirTarifa(String(seleccion.get('ticket') ?? ''), String(seleccion.get('concepto') ?? ''), campo.form);
+          }} />}
       </>}
       {administra && resumen.acuerdos && !reasignado && <Formulario titulo="Abonar al flete del chofer" accion="abono" enviar={enviar}
         campos={[fecha, importe, ['referencia','Referencia']]} />}

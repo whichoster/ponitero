@@ -10,7 +10,7 @@ type Expediente = {
   resumen: Omit<Fila, 'acuerdos'> & { acuerdos?: boolean | { producto: string; venta: string } };
   beneficiario: string;
   planes?: Fila[];
-  compras: Fila[];
+  compras: (Fila & { version?: number })[];
   remisiones?: Fila[];
   gastos?: Fila[];
   abonos?: Fila[];
@@ -28,6 +28,20 @@ const gastosOpcionales = [
   ['combustible propio', 'Combustible propio'], ['agua', 'Agua'], ['lonches', 'Lunch'], ['otro', 'Otros'],
 ];
 const pesos = new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' });
+
+const variedades = ['Cayena', 'MD2', 'Champaca', 'Otra'];
+const camposTicket: Campo[] = [
+  ['folio','Folio del ticket de finca'], ['finca','Finca'], ['variedad','Variedad',variedades],
+  ['descripcion','Descripción de otra variedad','opcional'], ['kg','Peso en kg','decimal'],
+];
+const camposCompraNueva: Campo[] = [
+  ['productor','Productor'], ...camposTicket, ['tarifa','Compra por tonelada','decimal'], ['reserva','Reserva pactada (MXN)','decimal'],
+];
+
+function valoresTicket(ticket: Fila) {
+  const variedad = ticket.variedad ?? '';
+  return variedades.includes(variedad) ? ticket : { ...ticket, variedad: 'Otra', descripcion: variedad };
+}
 
 function Formulario({ titulo, accion, campos, enviar, inicial, tickets, beneficiario, valoresIniciales, children, etiquetaGuardar = 'Guardar' }: {
   titulo: string; accion: string; campos: Campo[];
@@ -65,7 +79,7 @@ function Formulario({ titulo, accion, campos, enviar, inicial, tickets, benefici
     <form className="captura" onSubmit={guardar}>
       {children}
       {campos.map(([nombre, etiqueta, tipo]) => <label key={nombre}>{etiqueta}
-        {Array.isArray(tipo) ? <select name={nombre} required>
+        {Array.isArray(tipo) ? <select name={nombre} defaultValue={valoresIniciales?.[nombre] ?? undefined} required>
           {tipo.map(opcion => <option key={opcion}>{opcion}</option>)}
         </select> : <input name={nombre} defaultValue={nombre === 'beneficiario' ? beneficiario : valoresIniciales?.[nombre] ?? undefined} required={tipo !== 'opcional'}
           type={tipo === 'fecha' ? 'date' : 'text'}
@@ -86,7 +100,7 @@ function Formulario({ titulo, accion, campos, enviar, inicial, tickets, benefici
           </label>}
         </div>
       </fieldset>}
-      {tickets && <label>Ticket de finca<select name="ticket" required>
+      {tickets && <label>Ticket de finca<select name="ticket" defaultValue={valoresIniciales?.ticket ?? undefined} required>
         <option value="">Selecciona un ticket</option>
         {tickets.map(ticket => <option key={ticket.id} value={ticket.id ?? ''}>
           {ticket.folio} · {ticket.finca} · {ticket.kg} kg
@@ -149,6 +163,14 @@ export function Operacion({ cargar, registrar, administra, encargados, asignado,
     cerrado ? motivo : ['motivo','Motivo de ajuste','opcional'],
   ];
 
+  const camposGastoTicket: Campo[] = [...camposGasto, ['concepto','Concepto',['corte','estiba','flete local','vaciado','pasaje']],
+    importe, ['tarifa','Tarifa por tonelada','decimal']];
+  function capturaGastoTicket(ticket: Fila) {
+    if (!datos || reasignado || (cerrado && !administra)) return null;
+    return <Formulario titulo="Registrar gasto" accion="gasto" enviar={enviar}
+      beneficiario={datos.beneficiario} inicial={{ ticket: ticket.id }} campos={camposGastoTicket} />;
+  }
+
   return <section className="operacion">
     {mensaje && <p role="status">{mensaje}</p>}
     {!datos && !mensaje && <p>Cargando expediente…</p>}
@@ -188,23 +210,52 @@ export function Operacion({ cargar, registrar, administra, encargados, asignado,
           <p>{datos.entrega.fecha} · {resumen.acuerdos.producto} · {datos.entrega.kg} kg</p>
           <p>Precio pactado por tonelada {pesos.format(Number(resumen.acuerdos.venta))}</p>
         </details>}
-        {datos.remisiones?.map(remision => <details key={remision.productor}>
-          <summary>Remisión de compra · {remision.productor}</summary>
-          <ul>{datos.compras.filter(ticket => ticket.productor === remision.productor).map(ticket => <li key={ticket.id}>
-            {ticket.folio} · {ticket.finca} · {ticket.variedad} · {ticket.kg} kg · {pesos.format(Number(ticket.importe))}
-          </li>)}</ul>
-          <p>Reserva sugerida {pesos.format(Number(remision.reserva_sugerida))}</p>
-          <p>Total {remision.kg} kg · {pesos.format(Number(remision.importe))} · Reserva pactada {pesos.format(Number(remision.reserva))}</p>
-        </details>)}
       </>}
+      {resumen.acuerdos && <section>
+        <h4>Comprar a productores</h4>
+        <p>Folio {resumen.folio_compra} · {resumen.kg_comprados} kg comprados
+          {resumen.kg_pendientes != null && <> · {resumen.kg_pendientes} kg pendientes</>}
+        </p>
+        {administra && !cerrado && !reasignado && <Formulario titulo="Agregar ticket de finca"
+          accion="compra" enviar={enviar} campos={camposCompraNueva}>
+          <p>Folio de compra {resumen.folio_compra}</p>
+        </Formulario>}
+        {datos.remisiones?.map(remision => {
+          const tickets = datos.compras.filter(ticket => ticket.productor === remision.productor);
+          const fincas = [...new Set(tickets.flatMap(ticket => ticket.finca ? [ticket.finca] : []))];
+          return <details key={remision.productor}>
+            <summary>{remision.folio} · {remision.productor}</summary>
+            <p>Total {remision.kg} kg · {pesos.format(Number(remision.importe))} · Reserva pactada {pesos.format(Number(remision.reserva))}</p>
+            <p>Reserva sugerida {pesos.format(Number(remision.reserva_sugerida))}</p>
+            {!cerrado && !reasignado && <Formulario titulo="Agregar ticket" accion="compra" enviar={enviar}
+              inicial={{ productor: remision.productor }}
+              campos={camposCompraNueva.filter(campo => campo[0] !== 'productor' && campo[0] !== 'finca')}
+            >
+              <p>{remision.productor} · {remision.folio}</p>
+              <label>Finca<input name="finca" required maxLength={200} list={remision.folio ?? undefined}
+                defaultValue={fincas.length === 1 ? fincas[0] : undefined} /></label>
+              <datalist id={remision.folio ?? undefined}>{fincas.map(finca => <option key={finca} value={finca} />)}</datalist>
+            </Formulario>}
+            {tickets.map(ticket => <details key={ticket.id}>
+              <summary>{ticket.folio} · {ticket.finca} · {ticket.kg} kg</summary>
+              <p>{ticket.variedad} · {pesos.format(Number(ticket.tarifa))}/t · Importe {pesos.format(Number(ticket.importe))}
+                {' · '}Reserva {pesos.format(Number(ticket.reserva))}</p>
+              {!cerrado && !reasignado && <Formulario key={ticket.version} titulo="Corregir ticket"
+                accion="corregirCompra" enviar={enviar} inicial={{ ticket: ticket.id, version: ticket.version }}
+                valoresIniciales={valoresTicket(ticket)} campos={[...camposTicket, motivo]} />}
+              {capturaGastoTicket(ticket)}
+            </details>)}
+          </details>;
+        })}
+        {!administra && datos.compras.map(ticket => <details key={ticket.id}>
+          <summary>{ticket.folio} · {ticket.finca} · {ticket.kg} kg</summary>
+          {capturaGastoTicket(ticket)}
+        </details>)}
+      </section>}
       {administra && resumen.acuerdos && !cerrado && !reasignado && <>
         <Formulario key={plan?.id ?? 'primera-estimacion'} titulo={plan ? 'Modificar estimación' : 'Guardar estimación'}
           etiquetaGuardar="Guardar estimación" accion="plan" enviar={enviar} valoresIniciales={plan}
           campos={ [['kg','Compra prevista en kg','decimal'], ['merma','Merma estimada (%)','decimal'], ['gastos','Otros gastos previstos (MXN)','decimal'], ['oferta','Oferta a simular por tonelada','opcional']] } />
-        <Formulario titulo="Agregar ticket de finca" accion="compra" enviar={enviar}
-          campos={ [['folio','Folio'], ['finca','Finca'], ['productor','Productor'],
-            ['variedad','Variedad',['Cayena','MD2','Champaca','Otra']], ['descripcion','Descripción de otra variedad','opcional'],
-            ['kg','Peso en kg','decimal'], ['tarifa','Compra por tonelada','decimal'], ['reserva','Reserva pactada (MXN)','decimal']] } />
         <Formulario key={datos.ticketFabrica ? 'corregir-ticket' : 'registrar-ticket'}
           titulo={datos.ticketFabrica ? 'Corregir ticket de fábrica' : 'Registrar ticket de fábrica'}
           accion="ticketFabrica" enviar={enviar} valoresIniciales={datos.ticketFabrica} campos={[fecha,
@@ -260,8 +311,7 @@ export function Operacion({ cargar, registrar, administra, encargados, asignado,
           beneficiario={datos.beneficiario} campos={camposGasto} />
         {datos.compras.length > 0 && <Formulario titulo="Capturar gasto por ticket de finca" accion="gasto" enviar={enviar}
           beneficiario={datos.beneficiario} tickets={datos.compras}
-          campos={[...camposGasto, ['concepto','Concepto',['corte','estiba','flete local','vaciado','pasaje']],
-            importe, ['tarifa','Tarifa por tonelada','decimal']]} />}
+          campos={camposGastoTicket} />}
       </>}
       {administra && resumen.acuerdos && !reasignado && <Formulario titulo="Abonar al flete del chofer" accion="abono" enviar={enviar}
         campos={[fecha, importe, ['referencia','Referencia']]} />}
@@ -275,8 +325,9 @@ export function Operacion({ cargar, registrar, administra, encargados, asignado,
       </details>}
       {administra && !reasignado && datos.gastos?.map(gasto => <Formulario key={gasto.id} titulo={
         gasto.concepto + ' · ' + gasto.beneficiario + ' · ' + pesos.format(Number(gasto.importe)) + ' · ' + gasto.estado
+        + (gasto.requiere_revision_ticket ? ' · Revisar peso del ticket' : '')
       } accion="revision" enviar={enviar} inicial={{ gasto: gasto.id }}
-        campos={ [['estado','Resultado de la revisión',['aprobado','devuelto']], importe, motivo] } />)}
+        valoresIniciales={gasto} campos={ [['estado','Resultado de la revisión',['aprobado','devuelto']], importe, motivo] } />)}
     </>}
   </section>;
 }

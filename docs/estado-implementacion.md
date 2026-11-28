@@ -11,6 +11,7 @@
 - Acuerdos por viaje, estimaciones de merma, simulación de ofertas y tope de compra con reserva comercial. El historial muestra el tope conservador total y por tonelada de cada estimación. La sugerencia de reparto usa los kilos por productor y la primera estimación. La reserva pactada se captura por ticket.
 - **Modificar estimación** precarga la última versión y conserva las anteriores. El expediente reúne las capturas del viaje y aplica los permisos de consulta por rol.
 - Tickets de finca, remisiones agrupadas por productor, remisión de entrega y cotejo del ticket de fábrica con el correo de recepción.
+- **Comprar a productores** agrupa los tickets por productor y muestra el folio base y los kilos comprados y pendientes. Las remisiones de compra usan el consecutivo `C-n` por negocio con un sufijo fijo por productor. Administración puede corregir el ticket de un viaje abierto con motivo e historial. Los gastos vinculados a un peso corregido quedan señalados para revisión. El encargado puede iniciar un gasto desde un ticket de su viaje asignado.
 - La remisión de entrega se habilita con el ticket de fábrica completo. Precarga los datos del viaje y asigna un folio consecutivo `F-n` por negocio al emitir. La migración conserva las remisiones históricas.
 - Captura y aprobación de gastos, abonos al chofer, cierre operativo y cálculo de costo, merma y rentabilidad.
 - Captura de gastos generales con importes independientes, un concepto opcional y beneficiario editable precargado con el correo del encargado asignado.
@@ -24,6 +25,8 @@ Con Supabase local y las cuentas de demostración se verificaron el registro sim
 En Supabase local también se verificaron la asignación de vehículo por ambos roles, el rechazo de usuarios ajenos al viaje, el bloqueo de placas ocupadas y el registro separado de cada importe con el beneficiario editado.
 
 Con cuentas de demostración y datos sintéticos se verificaron la paginación con 23 empleados, la baja múltiple sin cambios parciales, la revisión simultánea de solicitudes y la cancelación, las versiones de estimación, la emisión concurrente y el reintento de remisiones, el cierre y la reasignación sin duplicar movimientos. En el navegador se comprobó el menú del administrador, la selección de un viaje, la ruta independiente de Empleados y la apertura del modal de alta.
+
+En Supabase local se aplicó la migración de folios de compra. Con las cuentas de demostración se verificaron dos aperturas simultáneas con folios consecutivos, compras simultáneas agrupadas por productor, corrección sin duplicar el ticket y señalamiento del gasto vinculado. La API rechazó la corrección de un encargado, la consulta de otro negocio, la consulta sin asignación, el folio duplicado y la corrección con una versión anterior.
 
 La migración conserva las coincidencias de nombre históricas y habilita la gestión de encargados para administradores existentes. Las cuentas administrativas nuevas requieren el permiso del superadministrador. Los viajes anteriores con acuerdos conservan el acceso a su expediente. Los viajes anteriores sin acuerdos requieren completar la apertura.
 

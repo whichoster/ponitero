@@ -584,7 +584,8 @@ class CampoController {
       return role === 'encargado' ? {
         beneficiario,
         gastos: gastosVisibles(result.gastos),
-        resumen: { acuerdos: Boolean(result.resumen.acuerdos), cerrado_en: result.resumen.cerrado_en, reasignado_en: result.resumen.reasignado_en },
+        resumen: { folio_compra: result.resumen.folio_compra, kg_pendientes: result.resumen.kg_pendientes,
+          kg_comprados: result.resumen.kg_comprados, acuerdos: Boolean(result.resumen.acuerdos), cerrado_en: result.resumen.cerrado_en, reasignado_en: result.resumen.reasignado_en },
         compras: result.compras.map(({ id, folio, finca, kg }) => ({ id, folio, finca, kg })),
       } : { ...result, beneficiario };
     });

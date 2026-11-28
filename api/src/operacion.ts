@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import type postgres from 'postgres';
 import { z } from 'zod';
 
@@ -17,13 +17,18 @@ const gasto = z.object({
   origen: z.enum(['directo','mensaje','llamada']), motivo: texto.optional(),
 });
 
+const datosTicket = z.object({
+  folio: texto, finca: texto, variedad: z.enum(['Cayena','MD2','Champaca','Otra']),
+  descripcion: texto.optional(), kg: peso,
+});
+
 export const operacion = z.discriminatedUnion('accion', [
   z.object({ accion: z.literal('acuerdos'), fecha: z.iso.date(), producto: texto,
     chofer: texto, vehiculo: texto, placas: texto, venta: tarifa, fleteChofer: tarifa, fleteCliente: tarifa }),
   z.object({ accion: z.literal('plan'), kg: peso, merma: decimal(4).refine(x => Number(x) <= 100), gastos: dinero, oferta: tarifa.optional() }),
-  z.object({ accion: z.literal('compra'), folio: texto, finca: texto, productor: texto,
-    variedad: z.enum(['Cayena','MD2','Champaca','Otra']), descripcion: texto.optional(),
-    kg: peso, tarifa, reserva: dinero }),
+  datosTicket.extend({ accion: z.literal('compra'), productor: texto, tarifa, reserva: dinero }),
+  datosTicket.extend({ accion: z.literal('corregirCompra'), ticket: z.uuid(),
+    version: z.number().int().positive(), motivo: texto }),
   gasto.extend({ accion: z.literal('gasto') }),
   z.object({
     accion: z.literal('gastos'),
@@ -50,7 +55,8 @@ export const operacion = z.discriminatedUnion('accion', [
 export async function expediente(sql: Sql, viaje: string) {
   const [resumen] = await sql`
     with base as (
-      select t.customer, t.acuerdos, t.cerrado_en, t.reasignado_en, f.kg kg_ticket, r.kg_correo, r.venta,
+      select t.customer, t.acuerdos, nullif(t.apertura->>'kg','') kg_previstos,
+        'C-' || case when t.consecutivo_compra<10 then '0' else '' end || t.consecutivo_compra folio_compra, t.cerrado_en, t.reasignado_en, f.kg kg_ticket, r.kg_correo, r.venta,
         coalesce(c.kg,0) kg_comprados, coalesce(c.importe,0) costo_compra,
         coalesce(g.total,0) gastos_aprobados, coalesce(g.pendientes,0) gastos_pendientes,
         coalesce(a.total,0) abonos_chofer
@@ -63,7 +69,8 @@ export async function expediente(sql: Sql, viaje: string) {
       cross join lateral (select sum(importe) total from campo.abonos_chofer where viaje=t.id) a
       where t.id=${viaje}
     ), calculo as (
-      select *, round(kg_ticket * (acuerdos->>'fleteChofer')::numeric / 1000,2) flete_chofer,
+      select *, case when kg_previstos is not null then greatest(0, kg_previstos::numeric-kg_comprados) end kg_pendientes,
+        round(kg_ticket * (acuerdos->>'fleteChofer')::numeric / 1000,2) flete_chofer,
         round(kg_ticket * (acuerdos->>'fleteCliente')::numeric / 1000,2) flete_cliente,
         case when kg_ticket=kg_correo then venta end venta_confirmada,
         kg_comprados-kg_ticket merma_kg
@@ -107,9 +114,11 @@ export async function expediente(sql: Sql, viaje: string) {
     ), pesos as (
       select *, sum(kg) over(order by productor) acumulado, sum(kg) over() total from proveedores
     )
-    select *, round(${planes[0]?.reserva ?? '0'}::numeric*acumulado/total,2)
+    select pesos.*, ${resumen.folio_compra} || '-' || r.sufijo folio,
+      round(${planes[0]?.reserva ?? '0'}::numeric*acumulado/total,2)
       - round(${planes[0]?.reserva ?? '0'}::numeric*(acumulado-kg)/total,2) reserva_sugerida
-    from pesos order by productor`;
+    from pesos join campo.remisiones_compra r on r.viaje=${viaje} and r.productor=pesos.productor
+    order by r.sufijo`;
   const gastos = await sql`select * from campo.gastos where viaje=${viaje} order by fecha,id`;
   const abonos = await sql`select * from campo.abonos_chofer where viaje=${viaje} order by fecha,id`;
   const [recepcion] = await sql`select *, fecha::text as fecha_capturada from campo.recepciones where viaje=${viaje}`;
@@ -143,12 +152,29 @@ export async function registrarOperacion(
         values(${viaje},${datos.kg},${datos.merma},${datos.gastos},${datos.oferta ?? null})`;
       break;
     case 'compra':
+    case 'corregirCompra': {
       if (datos.variedad === 'Otra' && !datos.descripcion) throw new BadRequestException('Describe la variedad.');
-      await sql`insert into campo.compras(viaje,folio,finca,productor,variedad,kg,tarifa,reserva)
-        values(${viaje},${datos.folio},${datos.finca},${datos.productor},
-        ${datos.descripcion && datos.variedad === 'Otra' ? datos.descripcion : datos.variedad},
-        ${datos.kg},${datos.tarifa},${datos.reserva})`;
-      break;
+      const variedad = datos.variedad === 'Otra' ? datos.descripcion! : datos.variedad;
+      if (datos.accion === 'compra') {
+        await sql`insert into campo.remisiones_compra (viaje,productor,sufijo)
+          select ${viaje},${datos.productor},coalesce(max(sufijo),0)+1
+          from campo.remisiones_compra where viaje=${viaje}
+          on conflict (viaje,productor) do nothing`;
+        const [nuevo] = await sql`insert into campo.compras(viaje,folio,finca,productor,variedad,kg,tarifa,reserva)
+          values(${viaje},${datos.folio},${datos.finca},${datos.productor},${variedad},
+          ${datos.kg},${datos.tarifa},${datos.reserva}) returning *`;
+        return { nuevo };
+      }
+      const [previo] = await sql`select * from campo.compras where viaje=${viaje} and id=${datos.ticket}`;
+      if (!previo) throw new NotFoundException('Ticket de finca no encontrado.');
+      if (previo.version !== datos.version) throw new ConflictException('El ticket cambió. Recarga el expediente antes de corregirlo.');
+      const [nuevo] = await sql`update campo.compras set folio=${datos.folio},finca=${datos.finca},
+        variedad=${variedad},kg=${datos.kg},version=version+1 where id=${datos.ticket} returning *`;
+      if (previo.kg !== nuevo.kg) {
+        await sql`update campo.gastos set requiere_revision_ticket=true where viaje=${viaje} and ticket=${datos.ticket}`;
+      }
+      return { previo, nuevo };
+    }
     case 'gasto':
     case 'gastos': {
       if (actual.cerrado_en && (!datos.motivo || rol === 'encargado')) {
@@ -179,9 +205,9 @@ export async function registrarOperacion(
       return { gastos: cambios };
     }
     case 'revision': {
-      const [previo] = await sql`select estado,importe from campo.gastos where viaje=${viaje} and id=${datos.gasto}`;
+      const [previo] = await sql`select estado,importe,requiere_revision_ticket from campo.gastos where viaje=${viaje} and id=${datos.gasto}`;
       if (!previo) throw new BadRequestException('Gasto no encontrado.');
-      await sql`update campo.gastos set estado=${datos.estado},importe=${datos.importe} where id=${datos.gasto}`;
+      await sql`update campo.gastos set estado=${datos.estado},importe=${datos.importe},requiere_revision_ticket=false where id=${datos.gasto}`;
       return { previo, nuevo: datos };
     }
     case 'entrega': {

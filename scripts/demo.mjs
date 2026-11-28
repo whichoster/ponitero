@@ -36,10 +36,12 @@ try {
       await tx`insert into campo.members (business_id,user_id,role,can_manage_workers)
         values (${id},${owner},'administrador',true),(${id},${worker},'encargado',false)
         on conflict do nothing`;
+      await tx`select id from campo.businesses where id=${id} for update`;
       for (const number of [1, 2]) {
         const reference = 'DEMO-' + key.toUpperCase() + '-' + number;
         await tx`insert into campo.trips (business_id,reference,customer)
-          values (${id},${reference},'Sabormex') on conflict (business_id,reference) do nothing`;
+          select ${id},${reference},'Sabormex'
+          where not exists (select 1 from campo.trips where business_id=${id} and reference=${reference})`;
         if (number === 1) {
           const [trip] = await tx`select id from campo.trips where business_id=${id} and reference=${reference}`;
           await tx`insert into campo.assignments values (${id},${trip.id},${worker}) on conflict do nothing`;
